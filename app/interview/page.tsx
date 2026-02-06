@@ -38,6 +38,7 @@ import SubtitlesOverlay from "@/components/SubtitlesOverlay";
 import TranscriptModal from "@/components/TranscriptModal";
 import { useTTSStore } from "@/store/ttsStore";
 import * as TTS from "@/lib/tts";
+import { TTSQueue } from "@/lib/ttsQueue";
 
 export default function InterviewPage() {
     const router = useRouter();
@@ -49,11 +50,16 @@ export default function InterviewPage() {
     const geminiClientRef = useRef<GeminiClient | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
+    // TTS Queue Ref
+    const ttsQueueRef = useRef<TTSQueue | null>(null);
+
     const [isVideoEnabled, setIsVideoEnabled] = useState(true);
     const [isAudioEnabled, setIsAudioEnabled] = useState(true);
     const [useSpeechRecognition, setUseSpeechRecognition] = useState(true);
     const [manualInput, setManualInput] = useState("");
     const [isTranscriptModalOpen, setIsTranscriptModalOpen] = useState(false);
+    const [errorDetails, setErrorDetails] = useState<{ code: string; message: string; hint: string; requestId: string } | null>(null);
+    const [waitingForSilence, setWaitingForSilence] = useState(false);
 
     const {
         sessionId,
@@ -67,6 +73,12 @@ export default function InterviewPage() {
         streamingText,
         hasInitialized,
         isRecruiterSpeaking,
+        utteranceBuffer,
+        silenceTimerId,
+        requestInFlight,
+        blockedUntil,
+        lastSentNormalized,
+        requestCounter,
         setStatus,
         setRecruiterState,
         addMessage,
@@ -80,6 +92,13 @@ export default function InterviewPage() {
         clearStreamingText,
         setHasInitialized,
         setIsRecruiterSpeaking,
+        appendUtteranceBuffer,
+        clearUtteranceBuffer,
+        setSilenceTimerId,
+        setRequestInFlight,
+        setBlockedUntil,
+        setLastSentNormalized,
+        incrementRequestCounter,
         reset,
     } = useInterviewStore();
 
@@ -168,12 +187,71 @@ export default function InterviewPage() {
     const generateRecruiterQuestion = useCallback(async (candidateText?: string) => {
         if (!config || !sessionId) return;
 
+        const now = Date.now();
+        const isInitialization = !hasInitialized;
+
+        // GUARD 1: Single-flight lock (HARD GATE)
+        if (requestInFlight) {
+            console.warn('[LLM] Ignored: request already in flight');
+            return;
+        }
+
+        // GUARD 2: Error cooldown
+        if (now < blockedUntil) {
+            const remainingMs = blockedUntil - now;
+            console.warn(`[LLM] Ignored: blocked for ${Math.ceil(remainingMs / 1000)}s more`);
+            return;
+        }
+
+        // GUARD 3: Don't send while recruiter is speaking
+        if (isRecruiterSpeaking) {
+            console.warn('[LLM] Ignored: recruiter is speaking');
+            return;
+        }
+
+        // GUARD 4: Minimum length check (skip for init)
+        if (!isInitialization && candidateText) {
+            const wordCount = candidateText.trim().split(/\s+/).length;
+            const charCount = candidateText.trim().length;
+
+            if (wordCount < 3 || charCount < 12) {
+                console.warn(`[LLM] Ignored: too short (${wordCount} words, ${charCount} chars)`);
+                return;
+            }
+        }
+
+        // GUARD 5: Deduplication
+        if (!isInitialization && candidateText) {
+            const normalized = candidateText.toLowerCase().trim()
+                .replace(/[^a-z0-9\s]/g, '')
+                .replace(/\s+/g, ' ');
+
+            if (normalized === lastSentNormalized && (now - (useInterviewStore.getState().lastSentTimestamp || 0)) < 10000) {
+                console.warn('[LLM] Ignored: duplicate transcript');
+                return;
+            }
+
+            setLastSentNormalized(normalized);
+        }
+
+        // Set lock
+        setRequestInFlight(true);
+        incrementRequestCounter();
+        setErrorDetails(null);
+
+        const currentRequestNum = requestCounter + 1;
+        const wordCount = candidateText ? candidateText.trim().split(/\s+/).length : 0;
+        const charCount = candidateText ? candidateText.trim().length : 0;
+
+        console.log(`[LLM] Sending next-turn #${currentRequestNum} - ${wordCount} words, ${charCount} chars`);
+
+        // Cancel any pending TTS
+        ttsQueueRef.current?.cancel();
+
         setRecruiterState("thinking");
+        clearStreamingText();
 
         try {
-            // Determine if this is initialization or a turn
-            const isInitialization = !hasInitialized;
-
             // Prepare request
             const requestBody: any = {
                 sessionId,
@@ -190,8 +268,6 @@ export default function InterviewPage() {
                 requestBody.candidateText = candidateText;
             }
 
-            console.log(`[Interview] ${isInitialization ? 'Initializing' : 'Next turn'} for session ${sessionId}`);
-
             // Call API
             const response = await fetch('/api/interview/next-turn', {
                 method: 'POST',
@@ -201,135 +277,179 @@ export default function InterviewPage() {
                 body: JSON.stringify(requestBody),
             });
 
-            const result = await response.json();
+            // Parse response (always JSON now)
+            const responseData = await response.json();
 
-            if (!result.ok) {
-                const error = result.error;
-                throw new Error(`${error.message}\n\nHint: ${error.hint}`);
+            // Check for ok:false responses
+            if (!responseData.ok) {
+                const error = responseData.error || {};
+                console.error(`[LLM] #${currentRequestNum} failed:`, error.code, error.message);
+
+                setErrorDetails({
+                    code: error.code || 'UNKNOWN',
+                    message: error.message || 'Request failed',
+                    hint: error.hint || 'Check server logs',
+                    requestId: error.requestId || 'N/A'
+                });
+
+                // Handle 429 rate limit with longer cooldown
+                if (error.code === 'QUOTA_EXCEEDED' || error.code === 'RATE_LIMITED' || response.status === 429) {
+                    const cooldownMs = 30000; // 30 seconds for rate limit
+                    setBlockedUntil(Date.now() + cooldownMs);
+                    console.warn(`[LLM] Rate limited - blocked for ${cooldownMs / 1000}s`);
+                } else {
+                    // Other errors: 2 second cooldown
+                    setBlockedUntil(Date.now() + 2000);
+                }
+
+                throw new Error(error.message || 'API Request failed');
             }
 
-            const data = result.data;
+            // For synchronous response (current fallback mode)
+            const data = responseData.data;
 
-            // Mark as initialized
-            if (isInitialization) {
-                setHasInitialized(true);
-                console.log('[Interview] Session initialized');
-            }
-
-            // Store private notes with evaluation
-            addPrivateNote({
-                timestamp: Date.now(),
-                signals: data.evaluation.signals,
-                score_hint: {
-                    total: data.evaluation.total_score,
-                    technical: data.evaluation.technical_score,
-                    communication: data.evaluation.communication_score,
-                    problem_solving: data.evaluation.problem_solving_score,
-                },
-            });
-
-            // Simulate streaming for UX
+            // Handle synchronous response (streaming disabled due to API key issue)
             setRecruiterState("speaking");
-            clearStreamingText();
 
-            const words = data.say.split(' ');
-            for (const word of words) {
-                appendStreamingText(word + ' ');
-                await new Promise(resolve => setTimeout(resolve, 30));
+            // Synchronous mode: speak the full text at once
+            if (data.say) {
+                if (ttsEnabled && ttsQueueRef.current) {
+                    ttsQueueRef.current.enqueue(data.say);
+                    ttsQueueRef.current.flush();
+                }
             }
 
-            // Add recruiter message
-            addMessage({
-                id: Date.now().toString(),
-                type: "recruiter",
-                text: data.say,
-                timestamp: Date.now(),
-            });
+            // Process response data
+            try {
 
-            clearStreamingText();
-            setRecruiterState("listening");
+                // Mark as initialized
+                if (isInitialization) {
+                    setHasInitialized(true);
+                    console.log(`[LLM] #${currentRequestNum} - Session initialized`);
+                }
+
+                // Store private notes with evaluation
+                if (data.evaluation) {
+                    addPrivateNote({
+                        timestamp: Date.now(),
+                        signals: data.evaluation.signals || [],
+                        score_hint: {
+                            total: data.evaluation.total_score || 0,
+                            technical: data.evaluation.technical_score || 0,
+                            communication: data.evaluation.communication_score || 0,
+                            problem_solving: data.evaluation.problem_solving_score || 0,
+                        },
+                    });
+                }
+
+                // Add recruiter message
+                if (data.say) {
+                    addMessage({
+                        id: Date.now().toString(),
+                        type: "recruiter",
+                        text: data.say,
+                        timestamp: Date.now(),
+                    });
+
+                    setLastSpokenMessageId(messages.length.toString());
+                }
+
+                console.log(`[LLM] #${currentRequestNum} - Success`);
+            } catch (e) {
+                console.error(`[LLM] #${currentRequestNum} - Error processing response:`, e);
+            }
+
+            // State cleanup is handled by TTS onEnd, but just in case
+            if (!ttsIsSpeaking) {
+                setRecruiterState("listening"); // Fallback
+            }
 
         } catch (error) {
-            console.error("Failed to generate question:", error);
-            console.error("Interview Config:", config);
-            showToast("error", error instanceof Error ? error.message : "Failed to generate question. Check API connection.");
-            setRecruiterState("idle");
-        }
-    }, [config, sessionId, hasInitialized, messages, setRecruiterState, addMessage, addPrivateNote, showToast, appendStreamingText, clearStreamingText, setHasInitialized]);
+            console.error(`[LLM] #${currentRequestNum} - Request failed:`, error);
 
-    // Auto-generate first question when interview starts
+            // Only show toast if we don't have detailed error already
+            if (!errorDetails) {
+                showToast("error", error instanceof Error ? error.message : "Failed to generate question");
+            }
+
+            setRecruiterState("idle");
+        } finally {
+            // Always release lock
+            setRequestInFlight(false);
+        }
+    }, [config, sessionId, hasInitialized, messages, requestInFlight, blockedUntil, isRecruiterSpeaking, lastSentNormalized, requestCounter, setRecruiterState, addMessage, addPrivateNote, showToast, clearStreamingText, setHasInitialized, ttsEnabled, ttsIsSpeaking, setLastSpokenMessageId, setRequestInFlight, setBlockedUntil, setLastSentNormalized, incrementRequestCounter, errorDetails]);
+
+    // Auto-generate first question when interview starts (ONCE)
     useEffect(() => {
-        if (status === "interviewing" && messages.length === 0 && config) {
+        if (status === "interviewing" && messages.length === 0 && config && !hasInitialized && !requestInFlight) {
             // Recruiter speaks first!
+            console.log('[Interview] Auto-starting initialization');
             generateRecruiterQuestion();
         }
-    }, [status, messages.length, config, generateRecruiterQuestion]);
+    }, [status, messages.length, config, hasInitialized, requestInFlight, generateRecruiterQuestion]);
 
-    // TTS: Speak recruiter messages
+    // Initialize TTS Queue
     useEffect(() => {
-        if (!ttsEnabled || !TTS.isSupported()) return;
-
-        // Find last recruiter message
-        const lastMessage = messages[messages.length - 1];
-        if (!lastMessage || lastMessage.type !== 'recruiter') return;
-
-        // Prevent duplicate speaking
-        if (lastMessage.id === lastSpokenMessageId) return;
-
-        // Speak the message
-        const lang = config?.language === 'FR' ? 'fr-FR' : 'en-US';
-
-        console.log(`[TTS] Speaking recruiter message: "${lastMessage.text.substring(0, 50)}..."`);
-
-        TTS.speak(lastMessage.text, {
-            voiceURI: voiceURI || undefined,
-            rate: ttsRate,
-            pitch: ttsPitch,
-            volume: ttsVolume,
-            lang,
+        ttsQueueRef.current = new TTSQueue({
             onStart: () => {
                 setTTSIsSpeaking(true);
-                setRecruiterState('speaking');
                 setIsRecruiterSpeaking(true);
+                setRecruiterState('speaking');
 
-                // PAUSE MIC to prevent echo
+                // Pause mic
                 if (speechRecognitionRef.current) {
                     console.log("[Mic] Pausing recognition (recruiter speaking)");
                     speechRecognitionRef.current.pause();
                 }
             },
+            onSpeakingStateChange: (speaking) => {
+                if (speaking) {
+                    setRecruiterState('speaking');
+                    setIsRecruiterSpeaking(true);
+                }
+            },
             onEnd: () => {
                 setTTSIsSpeaking(false);
                 setIsRecruiterSpeaking(false);
-                if (status === 'interviewing') {
+
+                if (useInterviewStore.getState().status === 'interviewing') {
                     setRecruiterState('listening');
                 }
 
-                // RESUME MIC after delay
+                // Resume mic with delay
                 setTimeout(() => {
-                    if (status === 'interviewing' && speechRecognitionRef.current) {
+                    const currentStatus = useInterviewStore.getState().status;
+                    if (currentStatus === 'interviewing' && speechRecognitionRef.current) {
                         console.log("[Mic] Resuming recognition");
                         speechRecognitionRef.current.resume();
                     }
-                }, 500); // 500ms delay to clear echo tail
-            },
-            onError: (error) => {
-                console.error('[TTS] Error:', error);
-                setTTSIsSpeaking(false);
-                setIsRecruiterSpeaking(false);
-                if (speechRecognitionRef.current) {
-                    speechRecognitionRef.current.resume();
-                }
+                }, 500);
             }
         });
 
-        setLastSpokenMessageId(lastMessage.id);
-    }, [messages, ttsEnabled, voiceURI, ttsRate, ttsPitch, ttsVolume, config?.language, lastSpokenMessageId, setLastSpokenMessageId, setTTSIsSpeaking, setRecruiterState, status, setIsRecruiterSpeaking]);
+        return () => {
+            console.log("[TTS Queue] Cleaning up");
+            ttsQueueRef.current?.cancel();
+        };
+    }, [setIsRecruiterSpeaking, setRecruiterState, setTTSIsSpeaking]);
+
+    // Update TTS Options when they change
+    useEffect(() => {
+        if (ttsQueueRef.current) {
+            ttsQueueRef.current.setOptions({
+                voiceURI: voiceURI || undefined,
+                rate: ttsRate,
+                pitch: ttsPitch,
+                volume: ttsVolume,
+                lang: config?.language === 'FR' ? 'fr-FR' : 'en-US',
+            });
+        }
+    }, [voiceURI, ttsRate, ttsPitch, ttsVolume, config?.language]);
 
     // Cancel TTS on interview end
     useEffect(() => {
         if (status === 'ended' || status === 'paused') {
-            TTS.cancel();
+            ttsQueueRef.current?.cancel();
             setTTSIsSpeaking(false);
         }
     }, [status, setTTSIsSpeaking]);
@@ -352,24 +472,85 @@ export default function InterviewPage() {
             console.log('[Interview] Ignoring duplicate transcript');
             return;
         }
+    }, []); // Dependencies removed as this function is now just a guard
 
-        // Mark as sent
-        setLastSentTranscript(text.trim(), now);
+    // Utterance aggregator: accumulate final transcripts and send after silence
+    const handleFinalTranscript = useCallback((text: string) => {
+        if (!text || text.trim().length === 0) return;
 
-        // Add user message
+        // Ignore if recruiter is speaking
+        if (isRecruiterSpeaking) {
+            console.warn('[Utterance] Ignored: recruiter is speaking');
+            return;
+        }
+
+        // Append to buffer
+        appendUtteranceBuffer(text);
+        setWaitingForSilence(true);
+
+        // Clear any existing silence timer
+        if (silenceTimerId) {
+            clearTimeout(silenceTimerId);
+        }
+
+        // Start new silence timer (1000ms)
+        const timerId = setTimeout(() => {
+            const currentBuffer = useInterviewStore.getState().utteranceBuffer;
+
+            if (currentBuffer && currentBuffer.trim().length > 0) {
+                console.log(`[Utterance] Silence detected - sending buffer: "${currentBuffer.substring(0, 50)}..."`);
+
+                // Send the accumulated utterance
+                sendCompleteUtterance(currentBuffer.trim());
+
+                // Clear buffer
+                clearUtteranceBuffer();
+                setWaitingForSilence(false);
+            }
+
+            setSilenceTimerId(null);
+        }, 1000); // 1 second silence threshold
+
+        setSilenceTimerId(timerId);
+    }, [isRecruiterSpeaking, silenceTimerId, appendUtteranceBuffer, clearUtteranceBuffer, setSilenceTimerId]);
+
+    // Send complete utterance to LLM
+    const sendCompleteUtterance = useCallback(async (text: string) => {
+        // Add to message history
         addMessage({
             id: Date.now().toString(),
             type: "user",
-            text: text.trim(),
+            text,
             timestamp: Date.now(),
         });
-
         clearLiveInterim();
-        setManualInput("");
 
         // Generate next question with candidate's answer
-        await generateRecruiterQuestion(text.trim());
+        await generateRecruiterQuestion(text);
     }, [addMessage, clearLiveInterim, generateRecruiterQuestion]);
+
+    // Manual send button handler
+    const handleManualSend = useCallback(() => {
+        const currentBuffer = utteranceBuffer.trim();
+
+        if (!currentBuffer || currentBuffer.length === 0) {
+            showToast("warning", "Please speak or type your answer first");
+            return;
+        }
+
+        // Clear silence timer if active
+        if (silenceTimerId) {
+            clearTimeout(silenceTimerId);
+            setSilenceTimerId(null);
+        }
+
+        console.log(`[Utterance] Manual send - buffer: "${currentBuffer.substring(0, 50)}..."`);
+
+        // Send immediately
+        sendCompleteUtterance(currentBuffer);
+        clearUtteranceBuffer();
+        setWaitingForSilence(false);
+    }, [utteranceBuffer, silenceTimerId, sendCompleteUtterance, clearUtteranceBuffer, setSilenceTimerId, showToast]);
 
     // Initialize speech recognition
     useEffect(() => {
@@ -388,16 +569,16 @@ export default function InterviewPage() {
             recognition.setLanguage(language);
 
             recognition.onInterim((text) => {
-                // Don't show interim if recruiter is speaking
+                // INTERIM: Update UI only, NEVER trigger API
                 if (!useInterviewStore.getState().isRecruiterSpeaking) {
                     setLiveInterim(text);
                 }
             });
 
             recognition.onFinal((text) => {
-                // Safety filter applied in handleUserAnswer too, but good to check here
+                // FINAL: Append to buffer and start/reset silence timer
                 if (!useInterviewStore.getState().isRecruiterSpeaking) {
-                    handleUserAnswer(text);
+                    handleFinalTranscript(text);
                 }
             });
 
@@ -417,7 +598,7 @@ export default function InterviewPage() {
                 recognition.stop();
             }
         };
-    }, [status, useSpeechRecognition, language, setLiveInterim, handleUserAnswer, showToast]);
+    }, [status, useSpeechRecognition, language, setLiveInterim, handleFinalTranscript, showToast]);
 
     const handleStart = async () => {
         if (!config) {
@@ -568,6 +749,30 @@ export default function InterviewPage() {
 
                     {/* Manual Input (when not using speech recognition) */}
 
+                    {/* Utterance Buffer Indicator */}
+                    {waitingForSilence && utteranceBuffer && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10"
+                        >
+                            <div className="bg-blue-900/80 backdrop-blur-sm border border-blue-500/50 rounded-lg px-4 py-2 flex items-center gap-3">
+                                <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                                    <span className="text-sm text-blue-200">Waiting for you to finish speaking...</span>
+                                </div>
+                                <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={handleManualSend}
+                                    disabled={requestInFlight}
+                                    className="ml-2"
+                                >
+                                    Send Now
+                                </Button>
+                            </div>
+                        </motion.div>
+                    )}
                 </div>
 
                 {/* Subtitles Overlay - Absolute positioned at the bottom */}
@@ -601,6 +806,53 @@ export default function InterviewPage() {
                     )}
                 </div>
             </div>
+
+            {/* Error Banner */}
+            {errorDetails && (
+                <motion.div
+                    initial={{ opacity: 0, y: -20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mx-6 mt-4 p-4 bg-red-900/20 border border-red-500/50 rounded-lg"
+                >
+                    <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                            <h3 className="font-semibold text-red-400 mb-1">Error: {errorDetails.code}</h3>
+                            <p className="text-sm text-gray-300 mb-2">{errorDetails.message}</p>
+                            {errorDetails.hint && (
+                                <p className="text-xs text-gray-400 italic">Hint: {errorDetails.hint}</p>
+                            )}
+                            {blockedUntil > Date.now() && (
+                                <p className="text-xs text-yellow-400 mt-2">
+                                    Cooldown: {Math.ceil((blockedUntil - Date.now()) / 1000)}s remaining
+                                </p>
+                            )}
+                            <p className="text-xs text-gray-500 mt-2">Request ID: {errorDetails.requestId}</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                    setErrorDetails(null);
+                                    setBlockedUntil(0);
+                                    if (!hasInitialized) {
+                                        generateRecruiterQuestion();
+                                    }
+                                }}
+                            >
+                                Retry
+                            </Button>
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setErrorDetails(null)}
+                            >
+                                Dismiss
+                            </Button>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
         </div>
     );
 }

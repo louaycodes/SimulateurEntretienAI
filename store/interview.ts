@@ -37,6 +37,14 @@ interface InterviewState {
     lastSentTimestamp: number;
     isRecruiterSpeaking: boolean;
 
+    // Utterance aggregation & request control
+    utteranceBuffer: string;
+    silenceTimerId: NodeJS.Timeout | null;
+    requestInFlight: boolean;
+    blockedUntil: number;
+    lastSentNormalized: string;
+    requestCounter: number;
+
     // Actions
     setSessionId: (id: string) => void;
     setConfig: (config: SessionConfig) => void;
@@ -59,6 +67,16 @@ interface InterviewState {
     setHasInitialized: (initialized: boolean) => void;
     setLastSentTranscript: (text: string, timestamp: number) => void;
     setIsRecruiterSpeaking: (speaking: boolean) => void;
+
+    // Utterance aggregation & request control
+    appendUtteranceBuffer: (text: string) => void;
+    clearUtteranceBuffer: () => void;
+    setSilenceTimerId: (id: NodeJS.Timeout | null) => void;
+    setRequestInFlight: (inFlight: boolean) => void;
+    setBlockedUntil: (timestamp: number) => void;
+    setLastSentNormalized: (text: string) => void;
+    incrementRequestCounter: () => void;
+
     reset: () => void;
 }
 
@@ -81,6 +99,14 @@ const initialState = {
     lastSentTranscript: "",
     lastSentTimestamp: 0,
     isRecruiterSpeaking: false,
+
+    // Utterance aggregation & request control
+    utteranceBuffer: "",
+    silenceTimerId: null as NodeJS.Timeout | null,
+    requestInFlight: false,
+    blockedUntil: 0,
+    lastSentNormalized: "",
+    requestCounter: 0,
 };
 
 export const useInterviewStore = create<InterviewState>((set) => ({
@@ -124,6 +150,17 @@ export const useInterviewStore = create<InterviewState>((set) => ({
     setHasInitialized: (initialized) => set({ hasInitialized: initialized }),
     setLastSentTranscript: (text, timestamp) => set({ lastSentTranscript: text, lastSentTimestamp: timestamp }),
     setIsRecruiterSpeaking: (speaking) => set({ isRecruiterSpeaking: speaking }),
+
+    // Utterance aggregation & request control
+    appendUtteranceBuffer: (text) => set((state) => ({
+        utteranceBuffer: state.utteranceBuffer ? `${state.utteranceBuffer} ${text}`.trim() : text
+    })),
+    clearUtteranceBuffer: () => set({ utteranceBuffer: "" }),
+    setSilenceTimerId: (id) => set({ silenceTimerId: id }),
+    setRequestInFlight: (inFlight) => set({ requestInFlight: inFlight }),
+    setBlockedUntil: (timestamp) => set({ blockedUntil: timestamp }),
+    setLastSentNormalized: (text) => set({ lastSentNormalized: text }),
+    incrementRequestCounter: () => set((state) => ({ requestCounter: state.requestCounter + 1 })),
 
     reset: () => set(initialState),
 }));

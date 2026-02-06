@@ -270,7 +270,23 @@ export async function nextTurn(options: NextTurnOptions): Promise<RecruiterRespo
         }
     }
 
-    fullPrompt += "\nNow, as the recruiter, provide your next response in the required STRICT JSON format. Return ONLY the JSON object, no markdown code blocks, no explanations:";
+    fullPrompt += `
+Now, as the recruiter, provide your next response in the required STRICT JSON format.
+Structure your JSON EXACTLY like this:
+{
+  "say": "Here write the text that you will speak to the candidate.",
+  "type": "question", 
+  "rubric": "hr",
+  "evaluation": {
+    "total_score": 0,
+    "technical_score": 0,
+    "communication_score": 0,
+    "problem_solving_score": 0,
+    "signals": []
+  }
+}
+
+Return ONLY the JSON object, no markdown code blocks, no explanations.`;
 
     // Make request
     const response = await makeGeminiRequest(fullPrompt);
@@ -359,4 +375,75 @@ export async function generateSummary(options: SummaryOptions): Promise<Intervie
     }
 
     return json as InterviewSummary;
+}
+
+/**
+ * Generate next interview turn with STREAMING
+ * Returns a ReadableStream of text chunks
+ */
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+export async function* nextTurnStream(options: NextTurnOptions): AsyncGenerator<string, void, unknown> {
+    const { systemPrompt, messages, config } = options;
+
+    if (!GEMINI_API_KEY) {
+        throw new LLMClientError(
+            "API_KEY_MISSING",
+            "GEMINI_API_KEY environment variable not set",
+            "Add GEMINI_API_KEY to your .env.local file"
+        );
+    }
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+
+    // Build full prompt
+    let fullPrompt = systemPrompt + "\n\n";
+
+    // Add conversation history
+    for (const msg of messages) {
+        if (msg.role === "user") {
+            fullPrompt += `Candidate: ${msg.content}\n\n`;
+        } else if (msg.role === "assistant") {
+            fullPrompt += `Recruiter: ${msg.content}\n\n`;
+        }
+    }
+
+    // CRITICAL: We need the 'say' field to be first for streaming to work well on client.
+    fullPrompt += `
+Now, as the recruiter, provide your next response in the required STRICT JSON format. 
+IMPORTANT: The JSON object MUST start with the "say" field.
+Structure your JSON EXACTLY like this:
+{
+  "say": "Here write the text that you will speak to the candidate.",
+  "type": "question", 
+  "rubric": "hr",
+  "evaluation": {
+    "total_score": 0,
+    "technical_score": 0,
+    "communication_score": 0,
+    "problem_solving_score": 0,
+    "signals": [] 
+  }
+}
+
+Return ONLY the JSON object, no markdown code blocks, no explanations.
+`;
+
+    try {
+        const result = await model.generateContentStream(fullPrompt);
+
+        for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            yield chunkText;
+        }
+    } catch (error: any) {
+        console.error("Gemini Streaming Error:", error);
+        throw new LLMClientError(
+            "UNKNOWN_ERROR",
+            error.message || "Streaming failed",
+            "Check server logs",
+            error
+        );
+    }
 }

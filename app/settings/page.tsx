@@ -116,26 +116,24 @@ export default function SettingsPage() {
     useEffect(() => {
         const checkApiStatus = async () => {
             try {
-                const response = await fetch("/api/interview/generate", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        systemPrompt: "Test",
-                        messages: [],
-                    }),
-                });
+                const response = await fetch("/api/status");
 
-                if (response.status === 500) {
+                if (response.ok) {
+                    setApiStatus("configured");
+                } else {
                     const error = await response.json();
-                    if (error.error?.includes("GEMINI_API_KEY")) {
+                    // Check specific error codes
+                    if (error.error?.code === "API_KEY_MISSING" || error.error?.code === "UNAUTHORIZED") {
                         setApiStatus("not_configured");
                     } else {
+                        // For other errors (network, quota), we assume configured but failing
                         setApiStatus("configured");
                     }
-                } else {
-                    setApiStatus("configured");
                 }
             } catch (error) {
+                // Network error likely
+                console.error("Status check failed", error);
+                // Keep as checking or set to configured (soft fail)
                 setApiStatus("not_configured");
             }
         };
