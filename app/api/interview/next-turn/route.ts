@@ -44,6 +44,7 @@ const RecruiterResponseSchema = z.object({
         technical_score: z.number(),
         communication_score: z.number(),
         problem_solving_score: z.number(),
+        experience_score: z.number(),
         signals: z.array(z.string()).optional()
     })
 });
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
         const needsInit = isInit || !session.hasInitialized;
 
         let systemPrompt = "";
-        let conversationMessages = messages || session.messages || [];
+        const conversationMessages = messages || session.messages || [];
 
         if (needsInit) {
             // INITIALIZATION
@@ -125,7 +126,7 @@ export async function POST(request: NextRequest) {
                 }, { status: 400 });
             }
 
-            systemPrompt = buildInterviewSystemPrompt(interviewParams);
+            systemPrompt = buildInterviewSystemPrompt(interviewParams as any);
             session.interviewParams = interviewParams;
             session.hasInitialized = true;
             sessionCache.set(sessionId, session);

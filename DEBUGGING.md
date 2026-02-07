@@ -17,7 +17,7 @@
 cat .env.local
 
 # Should contain:
-GEMINI_API_KEY=AIzaSyCcC5uhrqOBQ1i62LiOLEPZyE20DB7YQvk
+GEMINI_API_KEY=your_api_key_here
 ```
 
 **Step 2: Verify Package**

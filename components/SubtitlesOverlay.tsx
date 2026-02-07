@@ -8,6 +8,8 @@ interface SubtitlesOverlayProps {
     messages: ConversationMessage[];
     interimText: string;
     currentlySpeakingId: string | null;
+    recruiterText?: string;
+    recruiterSpeaking?: boolean;
 }
 
 interface SubtitleChunk {
@@ -20,7 +22,9 @@ interface SubtitleChunk {
 export default function SubtitlesOverlay({
     messages,
     interimText,
-    currentlySpeakingId
+    currentlySpeakingId,
+    recruiterText = "",
+    recruiterSpeaking = false
 }: SubtitlesOverlayProps) {
     const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleChunk | null>(null);
     const [queue, setQueue] = useState<SubtitleChunk[]>([]);
@@ -103,10 +107,12 @@ export default function SubtitlesOverlay({
         }
     }, [queue, currentSubtitle]);
 
-    // Override queue logic if there is LIVE interim text
-    const displaySubtitle = interimText
-        ? { text: interimText, speaker: "user" as const, id: "interim", duration: 0 }
-        : currentSubtitle;
+    // Priority: 1) Recruiter speaking (live), 2) User interim, 3) Queue
+    const displaySubtitle = recruiterSpeaking && recruiterText
+        ? { text: recruiterText, speaker: "recruiter" as const, id: "recruiter-live", duration: 0 }
+        : interimText
+            ? { text: interimText, speaker: "user" as const, id: "interim", duration: 0 }
+            : currentSubtitle;
 
     return (
         <div className="absolute bottom-12 left-0 right-0 flex justify-center px-8 text-center pointer-events-none z-50">

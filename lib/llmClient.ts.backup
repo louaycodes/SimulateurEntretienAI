@@ -1,18 +1,16 @@
 // Centralized LLM Client (Server-Side Only)
-// Uses Gemini REST API with proper contents[] formatting
+// Supports Gemini Interactions API with proper error handling
 
 import https from 'https';
 
 // Error codes for typed error handling
 export type LLMErrorCode =
     | "API_KEY_MISSING"
-    | "INVALID_ARGUMENT"
-    | "PERMISSION_DENIED"
-    | "NOT_FOUND"
-    | "RESOURCE_EXHAUSTED"
+    | "UNAUTHORIZED"
+    | "MODEL_NOT_FOUND"
+    | "QUOTA_EXCEEDED"
     | "NETWORK_ERROR"
     | "JSON_PARSE_FAILED"
-    | "INVALID_MODEL_JSON"
     | "UNKNOWN_ERROR";
 
 export interface LLMError {
@@ -38,15 +36,13 @@ export class LLMClientError extends Error {
 
 // Configuration
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const GEMINI_ENDPOINT = 'generativelanguage.googleapis.com';
 
 /**
- * Make a request to Gemini REST API with proper contents[] formatting
+ * Make a request to Gemini Interactions API
  */
-async function makeGeminiRequest(
-    contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
-    systemInstruction?: { parts: Array<{ text: string }> }
-): Promise<string> {
+async function makeGeminiRequest(input: string): Promise<string> {
     if (!GEMINI_API_KEY) {
         throw new LLMClientError(
             "API_KEY_MISSING",
@@ -55,24 +51,18 @@ async function makeGeminiRequest(
         );
     }
 
-    // Ensure model has "models/" prefix
-    const modelPath = GEMINI_MODEL.startsWith('models/') ? GEMINI_MODEL : `models/${GEMINI_MODEL}`;
-
     const requestBody = JSON.stringify({
-        contents,
-        systemInstruction,
-        generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-        }
+        model: GEMINI_MODEL,
+        input
     });
 
     const options = {
-        hostname: 'generativelanguage.googleapis.com',
-        path: `/v1beta/${modelPath}:generateContent?key=${GEMINI_API_KEY}`,
+        hostname: GEMINI_ENDPOINT,
+        path: '/v1beta/interactions',
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY,
             'Content-Length': Buffer.byteLength(requestBody)
         }
     };
@@ -100,35 +90,23 @@ async function makeGeminiRequest(
                         errorData = { message: data };
                     }
 
-                    // Log full error details
-                    console.error(`[LLM] Gemini Error Details:`, JSON.stringify(errorData, null, 2));
-
-                    // Map Gemini error to typed error
-                    if (res.statusCode === 400) {
-                        const message = errorData.error?.message || 'Invalid request';
+                    if (res.statusCode === 401 || res.statusCode === 403) {
                         reject(new LLMClientError(
-                            "INVALID_ARGUMENT",
-                            message,
-                            "Check request format. Gemini requires contents[] array with at least one message.",
-                            errorData
-                        ));
-                    } else if (res.statusCode === 403) {
-                        reject(new LLMClientError(
-                            "PERMISSION_DENIED",
-                            errorData.error?.message || "Invalid API key or permission denied",
+                            "UNAUTHORIZED",
+                            "Invalid API key",
                             "Check your GEMINI_API_KEY in .env.local",
                             errorData
                         ));
                     } else if (res.statusCode === 404) {
                         reject(new LLMClientError(
-                            "NOT_FOUND",
+                            "MODEL_NOT_FOUND",
                             `Model '${GEMINI_MODEL}' not found`,
-                            "Try 'gemini-1.5-flash' or 'gemini-1.5-pro'",
+                            "Try 'gemini-3-flash-preview' or check available models",
                             errorData
                         ));
                     } else if (res.statusCode === 429) {
                         reject(new LLMClientError(
-                            "RESOURCE_EXHAUSTED",
+                            "QUOTA_EXCEEDED",
                             "API quota exceeded or rate limited",
                             "Wait a moment and try again, or upgrade your plan",
                             errorData
@@ -136,7 +114,7 @@ async function makeGeminiRequest(
                     } else {
                         reject(new LLMClientError(
                             "UNKNOWN_ERROR",
-                            `HTTP ${res.statusCode}: ${errorData.error?.message || res.statusMessage}`,
+                            `HTTP ${res.statusCode}: ${res.statusMessage}`,
                             "Check server logs for details",
                             errorData
                         ));
@@ -158,40 +136,48 @@ async function makeGeminiRequest(
                     return;
                 }
 
-                // Extract text from Gemini response
-                if (!response.candidates || !Array.isArray(response.candidates) || response.candidates.length === 0) {
+                // Extract text from response
+                if (!response.outputs || !Array.isArray(response.outputs)) {
                     reject(new LLMClientError(
                         "JSON_PARSE_FAILED",
-                        "Missing candidates array in response",
+                        "Missing outputs array in response",
                         "API response structure is invalid",
                         response
                     ));
                     return;
                 }
 
-                const candidate = response.candidates[0];
-                if (!candidate.content || !candidate.content.parts || !Array.isArray(candidate.content.parts)) {
+                const lastOutput = response.outputs[response.outputs.length - 1];
+                if (!lastOutput || !lastOutput.text) {
                     reject(new LLMClientError(
                         "JSON_PARSE_FAILED",
-                        "Missing content.parts in response",
+                        "Missing text in output",
                         "API response structure is invalid",
                         response
                     ));
                     return;
                 }
 
-                const text = candidate.content.parts.map((p: any) => p.text).join('');
-                resolve(text);
+                resolve(lastOutput.text);
             });
         });
 
-        req.on('error', (error) => {
-            reject(new LLMClientError(
-                "NETWORK_ERROR",
-                "Network request failed",
-                "Check your internet connection",
-                error
-            ));
+        req.on('error', (error: any) => {
+            if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+                reject(new LLMClientError(
+                    "NETWORK_ERROR",
+                    "Cannot reach Gemini API",
+                    "Check your internet connection and firewall settings",
+                    error
+                ));
+            } else {
+                reject(new LLMClientError(
+                    "NETWORK_ERROR",
+                    error.message,
+                    "Network error occurred",
+                    error
+                ));
+            }
         });
 
         req.write(requestBody);
@@ -200,26 +186,16 @@ async function makeGeminiRequest(
 }
 
 /**
- * Extract JSON from text (handles markdown code blocks)
+ * Extract JSON from AI response text
  */
 function extractJSON(text: string): any {
-    // Remove markdown code blocks if present
-    let cleaned = text.trim();
-
-    if (cleaned.startsWith('```json')) {
-        cleaned = cleaned.replace(/```json\n?/g, '').replace(/```\n?$/g, '');
-    } else if (cleaned.startsWith('```')) {
-        cleaned = cleaned.replace(/```\n?/g, '');
-    }
-
-    // Try to find JSON object
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-
+    // Try to find JSON in the response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
         throw new LLMClientError(
-            "INVALID_MODEL_JSON",
-            "No JSON object found in response",
-            "AI did not return valid JSON",
+            "JSON_PARSE_FAILED",
+            "No JSON found in AI response",
+            "AI did not return JSON format. Try adjusting the prompt.",
             { rawText: text }
         );
     }
@@ -228,7 +204,7 @@ function extractJSON(text: string): any {
         return JSON.parse(jsonMatch[0]);
     } catch (error) {
         throw new LLMClientError(
-            "INVALID_MODEL_JSON",
+            "JSON_PARSE_FAILED",
             "Invalid JSON in AI response",
             "AI returned malformed JSON",
             { rawText: text, jsonMatch: jsonMatch[0] }
@@ -240,11 +216,11 @@ function extractJSON(text: string): any {
  * Ping test - minimal request to verify API connectivity
  */
 export async function ping(): Promise<{ ok: true; provider: string; model: string }> {
-    const contents = [
-        { role: 'user' as const, parts: [{ text: 'Return STRICT JSON only: {"ok": true, "msg": "pong"}. No markdown, no explanation.' }] }
-    ];
+    const response = await makeGeminiRequest(
+        'Return STRICT JSON only: {"ok": true, "msg": "pong"}. No markdown, no explanation.'
+    );
 
-    const response = await makeGeminiRequest(contents);
+    // Try to extract JSON
     const json = extractJSON(response);
 
     return {
@@ -275,7 +251,6 @@ export interface RecruiterResponse {
         technical_score: number;
         communication_score: number;
         problem_solving_score: number;
-        experience_score: number;
         signals: string[];
     };
 }
@@ -283,32 +258,38 @@ export interface RecruiterResponse {
 export async function nextTurn(options: NextTurnOptions): Promise<RecruiterResponse> {
     const { systemPrompt, messages } = options;
 
-    // Build systemInstruction
-    const systemInstruction = {
-        parts: [{ text: systemPrompt }]
-    };
+    // Build full prompt
+    let fullPrompt = systemPrompt + "\n\n";
 
-    // Build contents array from messages
-    const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
-
-    // CRITICAL: If no messages (init call), add a starter user message
-    if (messages.length === 0) {
-        contents.push({
-            role: 'user',
-            parts: [{ text: 'Start the interview now. Ask the first question. Return JSON only in the exact format specified in the system instruction.' }]
-        });
-    } else {
-        // Convert message history to Gemini format
-        for (const msg of messages) {
-            contents.push({
-                role: msg.role === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.content }]
-            });
+    // Add conversation history
+    for (const msg of messages) {
+        if (msg.role === "user") {
+            fullPrompt += `Candidate: ${msg.content}\n\n`;
+        } else if (msg.role === "assistant") {
+            fullPrompt += `Recruiter: ${msg.content}\n\n`;
         }
     }
 
+    fullPrompt += `
+Now, as the recruiter, provide your next response in the required STRICT JSON format.
+Structure your JSON EXACTLY like this:
+{
+  "say": "Here write the text that you will speak to the candidate.",
+  "type": "question", 
+  "rubric": "hr",
+  "evaluation": {
+    "total_score": 0,
+    "technical_score": 0,
+    "communication_score": 0,
+    "problem_solving_score": 0,
+    "signals": []
+  }
+}
+
+Return ONLY the JSON object, no markdown code blocks, no explanations.`;
+
     // Make request
-    const response = await makeGeminiRequest(contents, systemInstruction);
+    const response = await makeGeminiRequest(fullPrompt);
 
     // Extract and validate JSON
     const json = extractJSON(response);
@@ -316,20 +297,33 @@ export async function nextTurn(options: NextTurnOptions): Promise<RecruiterRespo
     // Validate schema
     if (!json.say || typeof json.say !== 'string') {
         throw new LLMClientError(
-            "INVALID_MODEL_JSON",
+            "JSON_PARSE_FAILED",
             "Missing or invalid 'say' field",
-            "AI response must include 'say' field with recruiter message",
+            "AI response doesn't match expected schema",
             json
         );
     }
 
     if (!json.evaluation || typeof json.evaluation !== 'object') {
         throw new LLMClientError(
-            "INVALID_MODEL_JSON",
+            "JSON_PARSE_FAILED",
             "Missing or invalid 'evaluation' field",
-            "AI response must include evaluation scores",
+            "AI response doesn't match expected schema",
             json
         );
+    }
+
+    // Validate scores
+    const requiredScores = ['total_score', 'technical_score', 'communication_score', 'problem_solving_score'];
+    for (const score of requiredScores) {
+        if (typeof json.evaluation[score] !== 'number') {
+            throw new LLMClientError(
+                "JSON_PARSE_FAILED",
+                `Missing or invalid '${score}' in evaluation`,
+                "AI response doesn't match expected schema",
+                json
+            );
+        }
     }
 
     return json as RecruiterResponse;
@@ -349,7 +343,6 @@ export interface InterviewSummary {
         technical: number;
         communication: number;
         problem_solving: number;
-        experience: number;
     };
     strengths: string[];
     weaknesses: string[];
@@ -363,25 +356,94 @@ export interface InterviewSummary {
 export async function generateSummary(options: SummaryOptions): Promise<InterviewSummary> {
     const { summaryPrompt } = options;
 
-    const contents = [
-        { role: 'user' as const, parts: [{ text: summaryPrompt }] }
-    ];
+    const fullPrompt = summaryPrompt + "\n\nReturn ONLY the JSON object, no markdown code blocks, no explanations:";
 
     // Make request
-    const response = await makeGeminiRequest(contents);
+    const response = await makeGeminiRequest(fullPrompt);
 
     // Extract and validate JSON
     const json = extractJSON(response);
 
-    // Validate required fields
-    if (!json.impression || !json.scores || !json.strengths || !json.weaknesses) {
+    // Basic validation
+    if (!json.impression || !json.scores || !json.strengths || !json.weaknesses || !json.improvement_plan) {
         throw new LLMClientError(
-            "INVALID_MODEL_JSON",
-            "Missing required fields in summary",
-            "Summary must include impression, scores, strengths, and weaknesses",
+            "JSON_PARSE_FAILED",
+            "Summary response missing required fields",
+            "AI response doesn't match expected schema",
             json
         );
     }
 
     return json as InterviewSummary;
+}
+
+/**
+ * Generate next interview turn with STREAMING
+ * Returns a ReadableStream of text chunks
+ */
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+export async function* nextTurnStream(options: NextTurnOptions): AsyncGenerator<string, void, unknown> {
+    const { systemPrompt, messages, config } = options;
+
+    if (!GEMINI_API_KEY) {
+        throw new LLMClientError(
+            "API_KEY_MISSING",
+            "GEMINI_API_KEY environment variable not set",
+            "Add GEMINI_API_KEY to your .env.local file"
+        );
+    }
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+
+    // Build full prompt
+    let fullPrompt = systemPrompt + "\n\n";
+
+    // Add conversation history
+    for (const msg of messages) {
+        if (msg.role === "user") {
+            fullPrompt += `Candidate: ${msg.content}\n\n`;
+        } else if (msg.role === "assistant") {
+            fullPrompt += `Recruiter: ${msg.content}\n\n`;
+        }
+    }
+
+    // CRITICAL: We need the 'say' field to be first for streaming to work well on client.
+    fullPrompt += `
+Now, as the recruiter, provide your next response in the required STRICT JSON format. 
+IMPORTANT: The JSON object MUST start with the "say" field.
+Structure your JSON EXACTLY like this:
+{
+  "say": "Here write the text that you will speak to the candidate.",
+  "type": "question", 
+  "rubric": "hr",
+  "evaluation": {
+    "total_score": 0,
+    "technical_score": 0,
+    "communication_score": 0,
+    "problem_solving_score": 0,
+    "signals": [] 
+  }
+}
+
+Return ONLY the JSON object, no markdown code blocks, no explanations.
+`;
+
+    try {
+        const result = await model.generateContentStream(fullPrompt);
+
+        for await (const chunk of result.stream) {
+            const chunkText = chunk.text();
+            yield chunkText;
+        }
+    } catch (error: any) {
+        console.error("Gemini Streaming Error:", error);
+        throw new LLMClientError(
+            "UNKNOWN_ERROR",
+            error.message || "Streaming failed",
+            "Check server logs",
+            error
+        );
+    }
 }

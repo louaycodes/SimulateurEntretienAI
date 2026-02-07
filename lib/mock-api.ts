@@ -1,131 +1,136 @@
 import { SessionData, Role, Level, InterviewType } from "./types";
 
-// Mock session data generator
-export function generateMockSession(id: string): SessionData {
-    const roles: Role[] = ["DevOps", "Cloud", "Backend", "Cybersecurity", "Data"];
-    const levels: Level[] = ["junior", "mid", "senior"];
-    const types: InterviewType[] = ["HR", "Tech", "Mixed"];
+// Helper to map DB session to Frontend SessionData
+function mapSessionToData(dbSession: any): SessionData {
+    // Map messages/transcript
+    const transcript = (dbSession.messages || []).map((msg: any) => ({
+        id: msg.id,
+        type: msg.role === 'candidate' ? 'user' : msg.role, // 'user' is expected by UI
+        text: msg.text,
+        timestamp: Number(msg.timestampMs)
+    }));
 
-    const role = roles[Math.floor(Math.random() * roles.length)];
-    const level = levels[Math.floor(Math.random() * levels.length)];
-    const interviewType = types[Math.floor(Math.random() * types.length)];
+    // Map scores
+    const scores = dbSession.finalReport ? {
+        overall: dbSession.finalReport.overallScore,
+        technical: dbSession.finalReport.technicalScore,
+        communication: dbSession.finalReport.communicationScore,
+        problemSolving: dbSession.finalReport.problemSolvingScore,
+        experience: dbSession.finalReport.experienceScore
+    } : dbSession.overallScore ? {
+        overall: dbSession.overallScore,
+        technical: dbSession.technicalScore,
+        communication: dbSession.communicationScore,
+        problemSolving: dbSession.problemSolvingScore,
+        experience: dbSession.experienceScore
+    } : undefined;
 
-    const startTime = Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000; // Within last week
-    const duration = 15 * 60 * 1000; // 15 minutes
+    // Map feedback
+    const feedback = dbSession.finalReport ? {
+        impression: dbSession.finalReport.impression,
+        strengths: dbSession.finalReport.whatIDidWell,
+        improvements: dbSession.finalReport.areasForImprovement
+    } : undefined;
 
     return {
-        id,
+        id: dbSession.id,
         config: {
-            role,
-            level,
-            interviewType,
-            language: "EN",
-            duration: 20,
+            role: dbSession.role as Role,
+            level: dbSession.level as Level,
+            interviewType: dbSession.interviewType as InterviewType,
+            language: dbSession.language || "EN",
+            duration: dbSession.durationMinutes || 30,
         },
-        startTime,
-        endTime: startTime + duration,
-        transcript: [
-            {
-                id: "1",
-                type: "recruiter",
-                text: "Hello! Thank you for joining us today. Let's start with a brief introduction. Can you tell me about yourself and your experience?",
-                timestamp: startTime,
-            },
-            {
-                id: "2",
-                type: "user",
-                text: "Sure! I have 3 years of experience in backend development, primarily working with Node.js and Python. I've built several REST APIs and worked with microservices architecture.",
-                timestamp: startTime + 30000,
-            },
-            {
-                id: "3",
-                type: "recruiter",
-                text: "That's great! Can you describe a challenging technical problem you've solved recently?",
-                timestamp: startTime + 90000,
-            },
-            {
-                id: "4",
-                type: "user",
-                text: "Recently, I optimized a database query that was causing performance issues. The query was taking over 5 seconds, and I reduced it to under 200ms by adding proper indexes and restructuring the query.",
-                timestamp: startTime + 120000,
-            },
-        ],
-        scores: {
-            overall: 75 + Math.floor(Math.random() * 20),
-            technical: 70 + Math.floor(Math.random() * 25),
-            communication: 75 + Math.floor(Math.random() * 20),
-            problemSolving: 70 + Math.floor(Math.random() * 25),
-            experience: 65 + Math.floor(Math.random() * 30),
-        },
-        feedback: {
-            impression: Math.random() > 0.3 ? "Lean Hire" : Math.random() > 0.5 ? "Hire" : "No Hire",
-            strengths: [
-                "Strong technical knowledge and clear communication",
-                "Good problem-solving approach with concrete examples",
-                "Demonstrated understanding of performance optimization",
-            ],
-            improvements: [
-                "Could provide more details about system design decisions",
-                "Consider discussing trade-offs in technical choices",
-                "Practice explaining complex concepts more concisely",
-            ],
-        },
+        startTime: new Date(dbSession.createdAt).getTime(),
+        endTime: dbSession.endedAt ? new Date(dbSession.endedAt).getTime() : undefined,
+        transcript,
+        scores,
+        feedback,
+        // Timeline is currently not persisted in detail, so we generate a basic one or omit
         timeline: [
             {
-                timestamp: startTime,
-                label: "Introduction",
-                description: "Candidate introduced themselves and background",
+                timestamp: new Date(dbSession.createdAt).getTime(),
+                label: "Interview Started",
+                description: `Started ${dbSession.role} interview`
             },
-            {
-                timestamp: startTime + 90000,
-                label: "Technical Discussion",
-                description: "Discussed challenging technical problem",
-            },
-            {
-                timestamp: startTime + 300000,
-                label: "System Design",
-                description: "Explored system architecture knowledge",
-            },
-            {
-                timestamp: startTime + duration - 60000,
-                label: "Closing",
-                description: "Q&A and wrap-up",
-            },
-        ],
+            ...(dbSession.endedAt ? [{
+                timestamp: new Date(dbSession.endedAt).getTime(),
+                label: "Interview Ended",
+                description: "Session completed"
+            }] : [])
+        ]
     };
 }
 
-export function generateMockSessions(count: number = 10): SessionData[] {
-    return Array.from({ length: count }, (_, i) => generateMockSession(`session-${i + 1}`));
-}
-
-// Mock API functions
+// Fetch session by ID
 export async function fetchSession(id: string): Promise<SessionData> {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    return generateMockSession(id);
+    try {
+        const response = await fetch(`/api/sessions/${id}`);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch session: ${response.statusText}`);
+        }
+        const data = await response.json();
+        if (!data.ok) {
+            throw new Error(data.error?.message || 'Failed to fetch session data');
+        }
+        return mapSessionToData(data.session);
+    } catch (error) {
+        console.error("API Error fetchSession:", error);
+        throw error;
+    }
 }
 
+// Fetch multiple sessions (used internally by dashboard usually)
 export async function fetchSessions(): Promise<SessionData[]> {
-    // Simulate API delay
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return generateMockSessions(10);
+    try {
+        const response = await fetch('/api/sessions/list');
+        if (!response.ok) {
+            throw new Error('Failed to fetch sessions list');
+        }
+        const data = await response.json();
+        if (!data.ok) return [];
+
+        return data.sessions.map(mapSessionToData);
+    } catch (error) {
+        console.error("API Error fetchSessions:", error);
+        return [];
+    }
 }
 
+// Fetch dashboard stats
 export async function fetchDashboardStats() {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+        const sessions = await fetchSessions();
 
-    const sessions = generateMockSessions(15);
-    const totalSessions = sessions.length;
-    const avgScore = Math.round(
-        sessions.reduce((sum, s) => sum + (s.scores?.overall || 0), 0) / totalSessions
-    );
+        const totalSessions = sessions.length;
+        const completedSessions = sessions.filter(s => s.scores && s.scores.overall > 0);
 
-    return {
-        totalSessions,
-        avgScore,
-        streak: Math.floor(Math.random() * 10) + 1,
-        topWeakness: "System Design",
-        recentSessions: sessions.slice(0, 5),
-    };
+        const avgScore = completedSessions.length > 0
+            ? Math.round(completedSessions.reduce((sum, s) => sum + (s.scores?.overall || 0), 0) / completedSessions.length)
+            : 0;
+
+        // Calculate streak (consecutive days with at least one session)
+        // Simple logic: sort by date descending
+        const sortedSessions = [...sessions].sort((a, b) => b.startTime - a.startTime);
+
+        // Use real recent sessions
+        const recentSessions = sortedSessions.slice(0, 5);
+
+        return {
+            totalSessions,
+            avgScore,
+            streak: 0, // Placeholder logic for now
+            topWeakness: "N/A", // Would need advanced analysis
+            recentSessions: recentSessions,
+        };
+    } catch (error) {
+        console.error("API Error fetchDashboardStats:", error);
+        return {
+            totalSessions: 0,
+            avgScore: 0,
+            streak: 0,
+            topWeakness: "-",
+            recentSessions: []
+        };
+    }
 }

@@ -39,6 +39,7 @@ import TranscriptModal from "@/components/TranscriptModal";
 import { useTTSStore } from "@/store/ttsStore";
 import * as TTS from "@/lib/tts";
 import { TTSQueue } from "@/lib/ttsQueue";
+import { persistence } from "@/lib/persistence";
 
 export default function InterviewPage() {
     const router = useRouter();
@@ -352,6 +353,14 @@ export default function InterviewPage() {
                     });
 
                     setLastSpokenMessageId(messages.length.toString());
+
+                    // Persist recruiter message
+                    persistence.queueMessage({
+                        role: "recruiter",
+                        text: data.say,
+                        timestampMs: Date.now(),
+                        elapsedSec: elapsedTime,
+                    });
                 }
 
                 console.log(`[LLM] #${currentRequestNum} - Success`);
@@ -384,7 +393,18 @@ export default function InterviewPage() {
         if (status === "interviewing" && messages.length === 0 && config && !hasInitialized && !requestInFlight) {
             // Recruiter speaks first!
             console.log('[Interview] Auto-starting initialization');
-            generateRecruiterQuestion();
+
+            // Create DB session and then start
+            persistence.createSession(config)
+                .then((dbSessionId) => {
+                    useInterviewStore.getState().setSessionId(dbSessionId);
+                    console.log('[Interview] DB Session created:', dbSessionId);
+                    generateRecruiterQuestion();
+                })
+                .catch(err => {
+                    console.error('[Interview] Failed to create DB session:', err);
+                    generateRecruiterQuestion(); // Fallback
+                });
         }
     }, [status, messages.length, config, hasInitialized, requestInFlight, generateRecruiterQuestion]);
 
@@ -523,6 +543,15 @@ export default function InterviewPage() {
             text,
             timestamp: Date.now(),
         });
+
+        // Persist user message
+        persistence.queueMessage({
+            role: "candidate",
+            text,
+            timestampMs: Date.now(),
+            elapsedSec: elapsedTime,
+        });
+
         clearLiveInterim();
 
         // Generate next question with candidate's answer
@@ -620,20 +649,42 @@ export default function InterviewPage() {
         await generateRecruiterQuestion();
     };
 
-    const handleEnd = () => {
-        setStatus("ended");
-        setRecruiterState("idle");
-
+    const handleEnd = async () => {
+        // Stop media
+        if (streamRef.current) {
+            stopMediaStream(streamRef.current);
+        }
         if (speechRecognitionRef.current) {
             speechRecognitionRef.current.stop();
         }
+        if (ttsQueueRef.current) {
+            ttsQueueRef.current.cancel();
+        }
 
-        showToast("info", "Interview ended");
+        setStatus("ended");
+        showToast("success", "Interview ended. Generating report...");
 
-        // Navigate to session review
-        setTimeout(() => {
-            router.push(`/session/mock-${Date.now()}`);
-        }, 500);
+        try {
+            // End session in DB and get report
+            await persistence.endSession(messages, config);
+
+            // Redirect to REAL session page
+            if (sessionId) {
+                router.push(`/session/${sessionId}`);
+            } else {
+                console.error("No sessionId found for redirect");
+                router.push('/dashboard');
+            }
+        } catch (error) {
+            console.error("Failed to persist end session:", error);
+            showToast("error", "Failed to save session, but you can view the transcript.");
+            // Fallback
+            if (sessionId) {
+                router.push(`/session/${sessionId}`);
+            } else {
+                router.push('/dashboard');
+            }
+        }
     };
 
     const handleManualSubmit = () => {
@@ -780,6 +831,8 @@ export default function InterviewPage() {
                     messages={messages}
                     interimText={liveInterim}
                     currentlySpeakingId={ttsIsSpeaking ? lastSpokenMessageId : null}
+                    recruiterText={streamingText}
+                    recruiterSpeaking={recruiterState === "speaking"}
                 />
 
                 {/* Transcript Modal */}

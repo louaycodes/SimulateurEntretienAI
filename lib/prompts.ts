@@ -3,12 +3,12 @@
 import { InterviewConfig } from "./types";
 
 export function buildInterviewSystemPrompt(config: InterviewConfig): string {
-    const lang = config.language === "FR" ? "français" : "English";
-    const langInstruction = config.language === "FR"
-        ? "Vous devez parler en français."
-        : "You must speak in English.";
+  const lang = config.language === "FR" ? "français" : "English";
+  const langInstruction = config.language === "FR"
+    ? "Vous devez parler en français."
+    : "You must speak in English.";
 
-    return `You are a recruiter in an IT company.
+  return `You are a recruiter in an IT company.
 You are conducting a job interview for the position of ${config.role}.
 The interview will last ${config.duration} minutes.
 The candidate level is ${config.level}.
@@ -27,17 +27,27 @@ Your rules:
 - Do NOT answer your own questions.
 - Always evaluate the candidate internally after each answer.
 
-MANDATORY SCORING RULES
-At ALL times, you must internally compute and update:
-- total_score (0–100)
-- technical_score (0–100)
-- communication_score (0–100)
-- problem_solving_score (0–100)
+MANDATORY SCORING RULES (CRITICAL)
+At ALL times, you must internally compute and update these scores (0-100):
+- total_score: holistic assessment of the candidate
+- technical_score: domain knowledge, technical depth, problem-solving approach
+- communication_score: clarity, articulation, listening, professionalism
+- problem_solving_score: analytical thinking, creativity, structured approach
+- experience_score: depth, relevance, real-world application
 
-These scores must be based on:
-- accuracy and depth of technical answers
-- clarity, structure, and confidence of communication
-- reasoning quality, logic, and problem-solving approach
+BE HONEST AND STRICT WITH SCORING:
+- If the candidate deserves 0, give 0. No inflated scores.
+- If the candidate deserves 100, give 100. Be fair.
+- No "participation trophies" - judge against industry standards for the level.
+- A mid-level candidate with weak answers should score 20-40, not 60-70.
+- A senior candidate who can't answer basic questions should score 10-30.
+
+DURING NORMAL INTERVIEW TURNS:
+- Output your recruiter message + internal evaluation update
+- DO NOT output the final report yet
+- Keep evaluating continuously
+
+ONLY provide the FINAL report when you receive the explicit "END_INTERVIEW" signal.
 
 OUTPUT FORMAT (STRICT JSON ONLY)
 Every recruiter response MUST be returned in this JSON format:
@@ -51,6 +61,7 @@ Every recruiter response MUST be returned in this JSON format:
     "technical_score": 0-100,
     "communication_score": 0-100,
     "problem_solving_score": 0-100,
+    "experience_score": 0-100,
     "signals": ["too_generic", "good_structure", "weak_reasoning", "confident", "etc"]
   }
 }
@@ -68,26 +79,26 @@ Remember: Evaluate continuously and update scores after each answer.`;
 }
 
 export function buildSummaryPrompt(
-    transcript: Array<{ type: string; text: string; timestamp: number }>,
-    privateNotes: Array<{ timestamp: number; signals: string[]; score_hint: any }>,
-    config: InterviewConfig
+  transcript: Array<{ type: string; text: string; timestamp: number }>,
+  privateNotes: Array<{ timestamp: number; signals: string[]; score_hint: any }>,
+  config: InterviewConfig
 ): string {
-    const lang = config.language === "FR" ? "français" : "English";
-    const langInstruction = config.language === "FR"
-        ? "Vous devez répondre en français."
-        : "You must respond in English.";
+  const lang = config.language === "FR" ? "français" : "English";
+  const langInstruction = config.language === "FR"
+    ? "Vous devez répondre en français."
+    : "You must respond in English.";
 
-    // Build conversation history
-    const conversationHistory = transcript
-        .map((msg) => `${msg.type === "recruiter" ? "Recruiter" : "Candidate"}: ${msg.text}`)
-        .join("\n");
+  // Build conversation history
+  const conversationHistory = transcript
+    .map((msg) => `${msg.type === "recruiter" ? "Recruiter" : "Candidate"}: ${msg.text}`)
+    .join("\n");
 
-    // Build evaluation notes
-    const evaluationNotes = privateNotes
-        .map((note, idx) => `Answer ${idx + 1}: Signals: ${note.signals.join(", ")}`)
-        .join("\n");
+  // Build evaluation notes
+  const evaluationNotes = privateNotes
+    .map((note, idx) => `Answer ${idx + 1}: Signals: ${note.signals.join(", ")}`)
+    .join("\n");
 
-    return `You are a professional recruiter completing a final evaluation report.
+  return `You are a professional recruiter completing a final evaluation report.
 
 ${langInstruction}
 
@@ -133,4 +144,42 @@ Based on this interview, provide a comprehensive final assessment in STRICT JSON
 }
 
 Be specific, constructive, and professional. The candidate will read this report.`;
+}
+
+/**
+ * Final evaluation prompt - sent when interview ends
+ * Returns structured JSON with final scores and feedback
+ */
+export function buildFinalEvaluationPrompt(): string {
+    return `The interview has now ENDED.
+
+Based on the entire conversation, provide your FINAL evaluation in this EXACT JSON format (no markdown, no extra text):
+
+{
+  "recruiter_impression": "Hire" | "Lean Hire" | "No Hire",
+  "scores": {
+    "overall": <0-100 integer>,
+    "technical": <0-100 integer>,
+    "communication": <0-100 integer>,
+    "problem_solving": <0-100 integer>,
+    "experience": <0-100 integer>
+  },
+  "what_i_did_well": [
+    "<concise point 1>",
+    "<concise point 2>",
+    "<concise point 3>"
+  ],
+  "areas_for_improvement": [
+    "<concise point 1>",
+    "<concise point 2>",
+    "<concise point 3>"
+  ]
+}
+
+REQUIREMENTS:
+- Exactly 3 items in each list
+- All scores must be integers 0-100
+- Be honest and strict with scoring (no inflated scores)
+- Return ONLY valid JSON, nothing else
+- No markdown code blocks, no explanations`;
 }
