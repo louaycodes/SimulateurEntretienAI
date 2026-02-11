@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
     Video,
     VideoOff,
@@ -36,6 +36,7 @@ import { buildInterviewSystemPrompt } from "@/lib/prompts";
 import FilmTranscript from "@/components/FilmTranscript"; // Keep for now or remove if fully replaced
 import SubtitlesOverlay from "@/components/SubtitlesOverlay";
 import TranscriptModal from "@/components/TranscriptModal";
+import PreparationOverlay from "@/components/PreparationOverlay";
 import { useTTSStore } from "@/store/ttsStore";
 import * as TTS from "@/lib/tts";
 import { TTSQueue } from "@/lib/ttsQueue";
@@ -61,6 +62,7 @@ export default function InterviewPage() {
     const [isTranscriptModalOpen, setIsTranscriptModalOpen] = useState(false);
     const [errorDetails, setErrorDetails] = useState<{ code: string; message: string; hint: string; requestId: string } | null>(null);
     const [waitingForSilence, setWaitingForSilence] = useState(false);
+    const [showPreparation, setShowPreparation] = useState(true);
 
     const {
         sessionId,
@@ -101,6 +103,10 @@ export default function InterviewPage() {
         setLastSentNormalized,
         incrementRequestCounter,
         reset,
+        preloadedResponse,
+        demoMode,
+        setPreloadedResponse,
+        setDemoMode,
     } = useInterviewStore();
 
     const { selectedAudioInput, selectedVideoInput, language } = usePreferencesStore();
@@ -388,11 +394,11 @@ export default function InterviewPage() {
         }
     }, [config, sessionId, hasInitialized, messages, requestInFlight, blockedUntil, isRecruiterSpeaking, lastSentNormalized, requestCounter, setRecruiterState, addMessage, addPrivateNote, showToast, clearStreamingText, setHasInitialized, ttsEnabled, ttsIsSpeaking, setLastSpokenMessageId, setRequestInFlight, setBlockedUntil, setLastSentNormalized, incrementRequestCounter, errorDetails]);
 
-    // Auto-generate first question when interview starts (ONCE)
+    // Auto-generate first question when interview starts WITHOUT a preloaded response
     useEffect(() => {
-        if (status === "interviewing" && messages.length === 0 && config && !hasInitialized && !requestInFlight) {
+        if (status === "interviewing" && messages.length === 0 && config && !hasInitialized && !requestInFlight && !preloadedResponse) {
             // Recruiter speaks first!
-            console.log('[Interview] Auto-starting initialization');
+            console.log('[Interview] Auto-starting initialization (no preloaded response)');
 
             // Create DB session and then start
             persistence.createSession(config)
@@ -406,7 +412,7 @@ export default function InterviewPage() {
                     generateRecruiterQuestion(); // Fallback
                 });
         }
-    }, [status, messages.length, config, hasInitialized, requestInFlight, generateRecruiterQuestion]);
+    }, [status, messages.length, config, hasInitialized, requestInFlight, preloadedResponse, generateRecruiterQuestion]);
 
     // Initialize TTS Queue
     useEffect(() => {
@@ -636,17 +642,71 @@ export default function InterviewPage() {
             return;
         }
 
-        // Generate unique session ID
-        const newSessionId = `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-        useInterviewStore.getState().setSessionId(newSessionId);
+        // Ensure we have a session ID (was created by PreparationOverlay)
+        const currentSessionId = useInterviewStore.getState().sessionId;
+        if (!currentSessionId) {
+            const newSessionId = `session-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+            useInterviewStore.getState().setSessionId(newSessionId);
+        }
 
-        console.log(`[Interview] Starting new session: ${newSessionId}`);
-
+        console.log(`[Interview] Starting session: ${useInterviewStore.getState().sessionId}`);
         setStatus("interviewing");
-        setRecruiterState("thinking");
 
-        // Generate first question (initialization)
-        await generateRecruiterQuestion();
+        // Use preloaded response if available (from PreparationOverlay)
+        const preloaded = useInterviewStore.getState().preloadedResponse;
+        if (preloaded && preloaded.say) {
+            console.log('[Interview] Using preloaded response — instant start!');
+            setRecruiterState("speaking");
+            setHasInitialized(true);
+
+            // Add recruiter message
+            addMessage({
+                id: Date.now().toString(),
+                type: "recruiter",
+                text: preloaded.say,
+                timestamp: Date.now(),
+            });
+
+            // TTS
+            if (ttsEnabled && ttsQueueRef.current) {
+                ttsQueueRef.current.enqueue(preloaded.say);
+                ttsQueueRef.current.flush();
+            }
+
+            // Store evaluation if present
+            if (preloaded.evaluation) {
+                addPrivateNote({
+                    timestamp: Date.now(),
+                    signals: preloaded.evaluation.signals || [],
+                    score_hint: {
+                        total: preloaded.evaluation.total_score || 0,
+                        technical: preloaded.evaluation.technical_score || 0,
+                        communication: preloaded.evaluation.communication_score || 0,
+                        problem_solving: preloaded.evaluation.problem_solving_score || 0,
+                    },
+                });
+            }
+
+            // Persist
+            persistence.queueMessage({
+                role: "recruiter",
+                text: preloaded.say,
+                timestampMs: Date.now(),
+                elapsedSec: 0,
+            });
+
+            // Clear preloaded
+            setPreloadedResponse(null);
+
+            // After TTS finishes, transition to listening (if not already handled)
+            if (!ttsEnabled) {
+                setTimeout(() => setRecruiterState("listening"), 2000);
+            }
+        } else {
+            // Fallback: fire the API call now (old behavior)
+            setRecruiterState("thinking");
+            await generateRecruiterQuestion();
+        }
     };
 
     const handleEnd = async () => {
@@ -720,192 +780,284 @@ export default function InterviewPage() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-950 text-white">
-            {/* Top Bar */}
-            <div className="glass-strong border-b border-gray-800 px-6 py-4">
-                <div className="flex items-center justify-between">
+        <>
+            {/* Preparation Overlay */}
+            <AnimatePresence>
+                {showPreparation && (
+                    <motion.div
+                        key="prep"
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                    >
+                        <PreparationOverlay
+                            onReady={() => {
+                                setShowPreparation(false);
+                                // Auto-start the interview
+                                handleStart();
+                            }}
+                        />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            <div className="min-h-screen bg-[#0a0a12] text-white flex flex-col overflow-hidden">
+                {/* ── Top Bar ── */}
+                <div className="relative px-6 py-3 flex items-center justify-between"
+                    style={{
+                        background: 'linear-gradient(180deg, rgba(15,15,25,0.95) 0%, rgba(10,10,18,0.85) 100%)',
+                        borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    }}
+                >
+                    {/* Left: Title + Badges */}
                     <div className="flex items-center gap-4">
-                        <h1 className="text-xl font-bold">Interview Room</h1>
+                        <h1 className="text-lg font-bold tracking-tight">Interview Room</h1>
                         {config && (
                             <div className="flex items-center gap-2">
-                                <span className="px-3 py-1 bg-primary-500 text-gray-900 rounded-full text-sm font-semibold">
+                                <span className="px-3 py-1 rounded-full text-xs font-semibold tracking-wide"
+                                    style={{
+                                        background: 'rgba(0, 255, 136, 0.12)',
+                                        color: '#00ff88',
+                                        border: '1px solid rgba(0, 255, 136, 0.25)',
+                                    }}
+                                >
                                     {config.role}
                                 </span>
-                                <span className="px-3 py-1 bg-gray-700 rounded-full text-sm">
+                                <span className="px-3 py-1 bg-white/5 border border-white/10 rounded-full text-xs text-gray-300">
                                     {config.level}
                                 </span>
-                                <span className="px-3 py-1 bg-gray-700 rounded-full text-sm">
+                                <span className="px-3 py-1 bg-white/5 border border-white/10 rounded-full text-xs text-gray-300">
                                     {config.interviewType}
                                 </span>
                             </div>
                         )}
                     </div>
 
-                    <div className="flex items-center gap-4">
-                        <div className="text-2xl font-mono">{formatTime(elapsedTime)}</div>
+                    {/* Right: Timer */}
+                    <div className="flex items-center gap-2 text-gray-300">
+                        <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        <span className="text-xl font-mono tracking-wider" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {formatTime(elapsedTime)}
+                        </span>
                     </div>
-                </div>
-            </div>
 
-            {/* Main Content */}
-            <div className="grid lg:grid-cols-2 gap-6 p-6 h-[calc(100vh-80px)]">
-                {/* Left: Video Panel */}
-                <div className="flex flex-col gap-4">
-                    <Card variant="glass" className="flex-1 flex flex-col">
-                        <div className="relative flex-1 bg-gray-900 rounded-xl overflow-hidden">
-                            <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                muted
-                                className="w-full h-full object-cover"
+                    {/* Bottom gradient line */}
+                    <div className="absolute bottom-0 left-0 right-0 h-[1px]"
+                        style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(0,255,136,0.3) 50%, transparent 100%)' }}
+                    />
+                </div>
+
+                {/* ── Main Content ── */}
+                <div className="flex-1 grid lg:grid-cols-2 gap-5 p-5 min-h-0">
+                    {/* Left Column: Video Panel */}
+                    <div className="flex flex-col gap-4 min-h-0">
+                        <div className={clsx("video-panel flex-1 flex flex-col", !isVideoEnabled && "camera-off")}>
+                            {/* Video Feed */}
+                            <div className="relative flex-1">
+                                <video
+                                    ref={videoRef}
+                                    autoPlay
+                                    playsInline
+                                    muted
+                                    className="w-full h-full object-cover"
+                                />
+                                {!isVideoEnabled && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+                                        <div className="w-20 h-20 rounded-full flex items-center justify-center"
+                                            style={{
+                                                background: 'rgba(255,255,255,0.05)',
+                                                border: '2px solid rgba(255,255,255,0.1)',
+                                            }}
+                                        >
+                                            <VideoOff className="w-10 h-10 text-gray-500" />
+                                        </div>
+                                        <span className="text-sm text-gray-500 font-medium">Camera Off</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* ── Control Dock ── */}
+                        <div className="flex justify-center">
+                            <div className="control-dock">
+                                <button
+                                    className={clsx("control-btn", isVideoEnabled && "active")}
+                                    onClick={toggleVideo}
+                                    title={isVideoEnabled ? "Turn off camera" : "Turn on camera"}
+                                >
+                                    {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+                                </button>
+                                <button
+                                    className={clsx("control-btn", isAudioEnabled && "active")}
+                                    onClick={toggleAudio}
+                                    title={isAudioEnabled ? "Mute microphone" : "Unmute microphone"}
+                                >
+                                    {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                                </button>
+
+                                {/* Divider */}
+                                <div className="w-[1px] h-8 bg-white/10 mx-1" />
+
+                                {status === "interviewing" && (
+                                    <button
+                                        className="control-btn danger"
+                                        onClick={handleEnd}
+                                        title="End interview"
+                                    >
+                                        <Phone className="w-5 h-5 rotate-[135deg]" />
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Right Column: Recruiter Panel */}
+                    <div className="flex flex-col gap-4 min-h-0 relative">
+                        <div className="recruiter-bg flex-1 rounded-2xl border border-white/5 flex flex-col items-center justify-center relative overflow-hidden">
+                            {/* Subtle grid overlay */}
+                            <div className="absolute inset-0 pointer-events-none"
+                                style={{
+                                    backgroundImage: 'radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px)',
+                                    backgroundSize: '24px 24px',
+                                }}
                             />
-                            {!isVideoEnabled && (
-                                <div className="absolute inset-0 flex items-center justify-center bg-gray-800">
-                                    <VideoOff className="w-16 h-16 text-gray-600" />
+                            <RecruiterAvatar state={recruiterState} />
+                        </div>
+
+                        {/* Utterance Buffer Indicator */}
+                        {waitingForSilence && utteranceBuffer && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10"
+                            >
+                                <div className="flex items-center gap-3 px-5 py-2.5 rounded-full"
+                                    style={{
+                                        background: 'rgba(59, 130, 246, 0.15)',
+                                        backdropFilter: 'blur(12px)',
+                                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                                    }}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                                        <span className="text-sm text-blue-200">Listening...</span>
+                                    </div>
+                                    <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        onClick={handleManualSend}
+                                        disabled={requestInFlight}
+                                        className="ml-1 !py-1 !px-3 !text-xs !rounded-full"
+                                    >
+                                        Send Now
+                                    </Button>
                                 </div>
-                            )}
-                        </div>
+                            </motion.div>
+                        )}
+                    </div>
 
-                        {/* Audio Level Meter */}
+                    {/* Subtitles Overlay */}
+                    <SubtitlesOverlay
+                        messages={messages}
+                        interimText={liveInterim}
+                        currentlySpeakingId={ttsIsSpeaking ? lastSpokenMessageId : null}
+                        recruiterText={streamingText}
+                        recruiterSpeaking={recruiterState === "speaking"}
+                    />
 
+                    {/* Transcript Modal */}
+                    <TranscriptModal
+                        isOpen={isTranscriptModalOpen}
+                        onClose={() => setIsTranscriptModalOpen(false)}
+                        messages={messages}
+                    />
 
-                        {/* Controls */}
-                        <div className="flex items-center justify-center gap-3 mt-4">
-                            <Button
-                                variant={isVideoEnabled ? "secondary" : "outline"}
-                                size="sm"
-                                onClick={toggleVideo}
+                    {/* ── Start Button (only when idle and no prep overlay) ── */}
+                    {status === "idle" && !showPreparation && (
+                        <div className="col-span-1 lg:col-span-2 flex items-center justify-center">
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.9 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ delay: 0.3 }}
                             >
-                                {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                            </Button>
-                            <Button
-                                variant={isAudioEnabled ? "secondary" : "outline"}
-                                size="sm"
-                                onClick={toggleAudio}
-                            >
-                                {isAudioEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-                            </Button>
-
+                                <button
+                                    onClick={handleStart}
+                                    className="group relative flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-bold tracking-wide transition-all duration-300"
+                                    style={{
+                                        background: 'linear-gradient(135deg, #00ff88 0%, #39FF14 100%)',
+                                        color: '#0a0a12',
+                                        boxShadow: '0 0 30px rgba(0, 255, 136, 0.3), 0 4px 20px rgba(0, 0, 0, 0.3)',
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 50px rgba(0, 255, 136, 0.5), 0 4px 30px rgba(0, 0, 0, 0.4)';
+                                        e.currentTarget.style.transform = 'scale(1.05)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.boxShadow = '0 0 30px rgba(0, 255, 136, 0.3), 0 4px 20px rgba(0, 0, 0, 0.3)';
+                                        e.currentTarget.style.transform = 'scale(1)';
+                                    }}
+                                >
+                                    <Play className="w-6 h-6" />
+                                    Start Interview
+                                </button>
+                            </motion.div>
                         </div>
-                    </Card>
+                    )}
                 </div>
 
-                {/* Right: Conversation Panel */}
-                <div className="flex flex-col gap-4 h-full relative">
-                    {/* Recruiter Avatar - Now takes more space */}
-                    <Card variant="glass" className="flex-1 flex flex-col items-center justify-center relative overflow-hidden bg-gradient-to-br from-gray-900 via-purple-950/20 to-gray-900 border-gray-800">
-                        <RecruiterAvatar state={recruiterState} />
-                    </Card>
-
-                    {/* Manual Input (when not using speech recognition) */}
-
-                    {/* Utterance Buffer Indicator */}
-                    {waitingForSilence && utteranceBuffer && (
-                        <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-10"
-                        >
-                            <div className="bg-blue-900/80 backdrop-blur-sm border border-blue-500/50 rounded-lg px-4 py-2 flex items-center gap-3">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
-                                    <span className="text-sm text-blue-200">Waiting for you to finish speaking...</span>
-                                </div>
+                {/* ── Error Banner ── */}
+                {errorDetails && (
+                    <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mx-5 mb-4 rounded-xl overflow-hidden"
+                        style={{
+                            background: 'rgba(239, 68, 68, 0.08)',
+                            border: '1px solid rgba(239, 68, 68, 0.2)',
+                        }}
+                    >
+                        <div className="flex items-start justify-between gap-4 p-4">
+                            <div className="flex-1">
+                                <h3 className="font-semibold text-red-400 mb-1 text-sm">Error: {errorDetails.code}</h3>
+                                <p className="text-sm text-gray-300 mb-1">{errorDetails.message}</p>
+                                {errorDetails.hint && (
+                                    <p className="text-xs text-gray-500 italic">Hint: {errorDetails.hint}</p>
+                                )}
+                                {blockedUntil > Date.now() && (
+                                    <p className="text-xs text-yellow-400 mt-2">
+                                        Cooldown: {Math.ceil((blockedUntil - Date.now()) / 1000)}s remaining
+                                    </p>
+                                )}
+                                <p className="text-xs text-gray-600 mt-1">Request ID: {errorDetails.requestId}</p>
+                            </div>
+                            <div className="flex gap-2 shrink-0">
                                 <Button
                                     size="sm"
-                                    variant="secondary"
-                                    onClick={handleManualSend}
-                                    disabled={requestInFlight}
-                                    className="ml-2"
+                                    variant="outline"
+                                    onClick={() => {
+                                        setErrorDetails(null);
+                                        setBlockedUntil(0);
+                                        if (!hasInitialized) {
+                                            generateRecruiterQuestion();
+                                        }
+                                    }}
+                                    className="!rounded-lg !text-xs"
                                 >
-                                    Send Now
+                                    Retry
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setErrorDetails(null)}
+                                    className="!rounded-lg !text-xs"
+                                >
+                                    Dismiss
                                 </Button>
                             </div>
-                        </motion.div>
-                    )}
-                </div>
-
-                {/* Subtitles Overlay - Absolute positioned at the bottom */}
-                <SubtitlesOverlay
-                    messages={messages}
-                    interimText={liveInterim}
-                    currentlySpeakingId={ttsIsSpeaking ? lastSpokenMessageId : null}
-                    recruiterText={streamingText}
-                    recruiterSpeaking={recruiterState === "speaking"}
-                />
-
-                {/* Transcript Modal */}
-                <TranscriptModal
-                    isOpen={isTranscriptModalOpen}
-                    onClose={() => setIsTranscriptModalOpen(false)}
-                    messages={messages}
-                />
-
-                {/* Action Buttons */}
-                <div className="col-span-1 lg:col-span-2 flex flex-wrap items-center justify-center gap-3">
-                    {status === "idle" && (
-                        <Button size="lg" onClick={handleStart}>
-                            <Play className="w-5 h-5" />
-                            Start Interview
-                        </Button>
-                    )}
-
-                    {status === "interviewing" && (
-                        <Button variant="outline" onClick={handleEnd} className="border-red-500 text-red-500">
-                            <Phone className="w-5 h-5" />
-                            End Interview
-                        </Button>
-                    )}
-                </div>
+                        </div>
+                    </motion.div>
+                )}
             </div>
-
-            {/* Error Banner */}
-            {errorDetails && (
-                <motion.div
-                    initial={{ opacity: 0, y: -20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mx-6 mt-4 p-4 bg-red-900/20 border border-red-500/50 rounded-lg"
-                >
-                    <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                            <h3 className="font-semibold text-red-400 mb-1">Error: {errorDetails.code}</h3>
-                            <p className="text-sm text-gray-300 mb-2">{errorDetails.message}</p>
-                            {errorDetails.hint && (
-                                <p className="text-xs text-gray-400 italic">Hint: {errorDetails.hint}</p>
-                            )}
-                            {blockedUntil > Date.now() && (
-                                <p className="text-xs text-yellow-400 mt-2">
-                                    Cooldown: {Math.ceil((blockedUntil - Date.now()) / 1000)}s remaining
-                                </p>
-                            )}
-                            <p className="text-xs text-gray-500 mt-2">Request ID: {errorDetails.requestId}</p>
-                        </div>
-                        <div className="flex gap-2">
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => {
-                                    setErrorDetails(null);
-                                    setBlockedUntil(0);
-                                    if (!hasInitialized) {
-                                        generateRecruiterQuestion();
-                                    }
-                                }}
-                            >
-                                Retry
-                            </Button>
-                            <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => setErrorDetails(null)}
-                            >
-                                Dismiss
-                            </Button>
-                        </div>
-                    </div>
-                </motion.div>
-            )}
-        </div>
+        </>
     );
 }
+

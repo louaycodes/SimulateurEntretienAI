@@ -45,6 +45,10 @@ interface InterviewState {
     lastSentNormalized: string;
     requestCounter: number;
 
+    // Preparation screen
+    preloadedResponse: { say: string; evaluation?: any } | null;
+    demoMode: boolean;
+
     // Actions
     setSessionId: (id: string) => void;
     setConfig: (config: SessionConfig) => void;
@@ -77,6 +81,10 @@ interface InterviewState {
     setLastSentNormalized: (text: string) => void;
     incrementRequestCounter: () => void;
 
+    // Preparation screen
+    setPreloadedResponse: (resp: { say: string; evaluation?: any } | null) => void;
+    setDemoMode: (demo: boolean) => void;
+
     reset: () => void;
 }
 
@@ -107,6 +115,10 @@ const initialState = {
     blockedUntil: 0,
     lastSentNormalized: "",
     requestCounter: 0,
+
+    // Preparation screen
+    preloadedResponse: null as { say: string; evaluation?: any } | null,
+    demoMode: false,
 };
 
 export const useInterviewStore = create<InterviewState>((set) => ({
@@ -161,6 +173,10 @@ export const useInterviewStore = create<InterviewState>((set) => ({
     setBlockedUntil: (timestamp) => set({ blockedUntil: timestamp }),
     setLastSentNormalized: (text) => set({ lastSentNormalized: text }),
     incrementRequestCounter: () => set((state) => ({ requestCounter: state.requestCounter + 1 })),
+
+    // Preparation screen
+    setPreloadedResponse: (resp) => set({ preloadedResponse: resp }),
+    setDemoMode: (demo) => set({ demoMode: demo }),
 
     reset: () => set(initialState),
 }));

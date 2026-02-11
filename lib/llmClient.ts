@@ -40,10 +40,44 @@ export class LLMClientError extends Error {
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
+// Global rate limiter: enforce minimum gap between requests
+let lastRequestTimestamp = 0;
+const MIN_REQUEST_GAP_MS = 1500; // 1.5 seconds between requests
+
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 5000; // 5 seconds
+
 /**
- * Make a request to Gemini REST API with proper contents[] formatting
+ * Sleep helper
  */
-async function makeGeminiRequest(
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Extract retry delay from Gemini error response (if available)
+ */
+function extractRetryDelay(errorData: any): number | null {
+    try {
+        const details = errorData?.error?.details;
+        if (Array.isArray(details)) {
+            for (const detail of details) {
+                if (detail['@type']?.includes('RetryInfo') && detail.retryDelay) {
+                    const delayStr = detail.retryDelay.replace('s', '');
+                    const seconds = parseFloat(delayStr);
+                    if (!isNaN(seconds)) return Math.ceil(seconds * 1000);
+                }
+            }
+        }
+    } catch { }
+    return null;
+}
+
+/**
+ * Single raw request to Gemini REST API (no retry)
+ */
+async function makeGeminiRequestOnce(
     contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
     systemInstruction?: { parts: Array<{ text: string }> }
 ): Promise<string> {
@@ -127,12 +161,14 @@ async function makeGeminiRequest(
                             errorData
                         ));
                     } else if (res.statusCode === 429) {
-                        reject(new LLMClientError(
+                        // Attach errorData for retry delay extraction
+                        const err = new LLMClientError(
                             "RESOURCE_EXHAUSTED",
                             "API quota exceeded or rate limited",
                             "Wait a moment and try again, or upgrade your plan",
                             errorData
-                        ));
+                        );
+                        reject(err);
                     } else {
                         reject(new LLMClientError(
                             "UNKNOWN_ERROR",
@@ -197,6 +233,61 @@ async function makeGeminiRequest(
         req.write(requestBody);
         req.end();
     });
+}
+
+/**
+ * Make a request to Gemini REST API with retry + exponential backoff for 429 errors
+ */
+async function makeGeminiRequest(
+    contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+    systemInstruction?: { parts: Array<{ text: string }> }
+): Promise<string> {
+    // Global rate limiting: wait if we're sending too fast
+    const now = Date.now();
+    const timeSinceLastRequest = now - lastRequestTimestamp;
+    if (timeSinceLastRequest < MIN_REQUEST_GAP_MS) {
+        const waitTime = MIN_REQUEST_GAP_MS - timeSinceLastRequest;
+        console.log(`[LLM] Rate limiter: waiting ${waitTime}ms before next request`);
+        await sleep(waitTime);
+    }
+    lastRequestTimestamp = Date.now();
+
+    let lastError: LLMClientError | null = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const result = await makeGeminiRequestOnce(contents, systemInstruction);
+            return result;
+        } catch (error) {
+            if (error instanceof LLMClientError && error.code === 'RESOURCE_EXHAUSTED') {
+                lastError = error;
+
+                if (attempt < MAX_RETRIES) {
+                    // Extract server-suggested delay or use exponential backoff
+                    const serverDelay = extractRetryDelay(error.details);
+                    const backoffDelay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
+                    const delay = serverDelay || backoffDelay;
+
+                    console.warn(`[LLM] Rate limited (429). Retry ${attempt + 1}/${MAX_RETRIES} after ${Math.ceil(delay / 1000)}s...`);
+                    await sleep(delay);
+                    lastRequestTimestamp = Date.now();
+                    continue;
+                }
+
+                console.error(`[LLM] Rate limited - all ${MAX_RETRIES} retries exhausted`);
+            } else {
+                // Non-retryable error, throw immediately
+                throw error;
+            }
+        }
+    }
+
+    // All retries failed
+    throw lastError || new LLMClientError(
+        "RESOURCE_EXHAUSTED",
+        "API quota exceeded after all retries",
+        "Wait a few minutes and try again, or upgrade your plan"
+    );
 }
 
 /**

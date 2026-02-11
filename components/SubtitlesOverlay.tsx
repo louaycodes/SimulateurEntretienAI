@@ -115,21 +115,48 @@ export default function SubtitlesOverlay({
             : currentSubtitle;
 
     return (
-        <div className="absolute bottom-12 left-0 right-0 flex justify-center px-8 text-center pointer-events-none z-50">
+        <div className="absolute bottom-14 left-0 right-0 flex justify-center px-8 text-center pointer-events-none z-50">
             <AnimatePresence mode="wait">
                 {displaySubtitle && (
                     <motion.div
                         key={displaySubtitle.id === "interim" ? "interim" : displaySubtitle.id}
-                        initial={{ opacity: 0, y: 10 }}
+                        initial={{ opacity: 0, y: 12 }}
                         animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        transition={{ duration: 0.2 }}
-                        className="bg-black/60 backdrop-blur-sm px-6 py-3 rounded-lg border border-white/10 shadow-xl max-w-3xl"
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.25, ease: "easeOut" }}
+                        className="max-w-3xl rounded-2xl px-6 py-3.5 flex items-center gap-3"
+                        style={{
+                            background: 'rgba(10, 10, 18, 0.75)',
+                            backdropFilter: 'blur(16px)',
+                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                        }}
                     >
-                        <p className={`text-xl md:text-2xl font-medium leading-relaxed tracking-wide drop-shadow-md
-                            ${displaySubtitle.speaker === "recruiter" ? "text-yellow-200" : "text-white"}
-                            ${displaySubtitle.id === "interim" ? "italic opacity-90" : ""}
-                        `}>
+                        {/* Speaker chip */}
+                        <span
+                            className="shrink-0 text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full"
+                            style={{
+                                background: displaySubtitle.speaker === "recruiter"
+                                    ? 'rgba(0, 255, 136, 0.12)'
+                                    : 'rgba(59, 130, 246, 0.12)',
+                                color: displaySubtitle.speaker === "recruiter"
+                                    ? '#00ff88'
+                                    : '#60a5fa',
+                                border: `1px solid ${displaySubtitle.speaker === "recruiter"
+                                    ? 'rgba(0, 255, 136, 0.25)'
+                                    : 'rgba(59, 130, 246, 0.25)'}`,
+                            }}
+                        >
+                            {displaySubtitle.speaker === "recruiter" ? "AI" : "You"}
+                        </span>
+
+                        {/* Subtitle text */}
+                        <p className={`text-lg md:text-xl font-medium leading-relaxed tracking-wide
+                            ${displaySubtitle.speaker === "recruiter" ? "text-gray-100" : "text-blue-100"}
+                            ${displaySubtitle.id === "interim" ? "italic opacity-80" : ""}
+                        `}
+                            style={{ textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}
+                        >
                             {displaySubtitle.text}
                         </p>
                     </motion.div>
@@ -138,3 +165,4 @@ export default function SubtitlesOverlay({
         </div>
     );
 }
+
