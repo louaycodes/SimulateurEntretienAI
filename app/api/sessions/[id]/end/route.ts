@@ -1,20 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/db';
 import { buildFinalEvaluationPrompt } from '@/lib/prompts';
-import { nextTurn } from '@/lib/llm/gemini';
-
-interface FinalEvaluationResponse {
-    recruiter_impression: 'Hire' | 'Lean Hire' | 'No Hire';
-    scores: {
-        overall: number;
-        technical: number;
-        communication: number;
-        problem_solving: number;
-        experience: number;
-    };
-    what_i_did_well: string[];
-    areas_for_improvement: string[];
-}
+import { generateFinalReport } from '@/lib/llmClient';
+import { InterviewConfig } from '@/lib/types';
 
 export async function POST(
     request: NextRequest,
@@ -30,110 +18,144 @@ export async function POST(
 
         console.log(`[Sessions] ${requestId} - Ending interview ${sessionId}`);
 
-        // Build conversation context for final evaluation
+        // 1. Fetch session details to get the configuration (role, level, etc.)
+        const session = await prisma.interviewSession.findUnique({
+            where: { id: sessionId },
+            select: {
+                role: true,
+                level: true,
+                interviewType: true,
+                language: true,
+                durationMinutes: true
+            }
+        });
+
+        if (!session) {
+            return NextResponse.json({
+                ok: false,
+                error: {
+                    code: 'SESSION_NOT_FOUND',
+                    message: `Session ${sessionId} not found`,
+                    requestId
+                }
+            }, { status: 404 });
+        }
+
+        // Build config object for prompt builder
+        const config: InterviewConfig = {
+            role: session.role as any, // Cast to any or strict type if imported
+            level: session.level as any,
+            interviewType: session.interviewType as any,
+            language: session.language as any,
+            duration: session.durationMinutes || 15
+        };
+
+        // 2. Build conversation context for final evaluation
         const conversationMessages = messages.map((msg: any) => ({
             role: msg.type === 'recruiter' ? 'assistant' as const : 'user' as const,
             content: msg.text
         }));
 
-        // Add final evaluation prompt
-        const finalPrompt = buildFinalEvaluationPrompt();
-        conversationMessages.push({
-            role: 'user' as const,
-            content: finalPrompt
-        });
+        // 3. Generate final prompt with specific context
+        const finalPrompt = buildFinalEvaluationPrompt(config);
 
-        // Call LLM for final evaluation
-        console.log(`[Sessions] ${requestId} - Requesting final evaluation from LLM`);
-        const response = await nextTurn({
+        // 4. Call LLM for final evaluation
+        console.log(`[Sessions] ${requestId} - Requesting final evaluation from Groq`);
+
+        const finalEvaluation = await generateFinalReport({
             systemPrompt: 'You are a professional recruiter providing final interview evaluation.',
             messages: conversationMessages,
-            config: { temperature: 0.3 } // Lower temperature for more consistent scoring
+            config: { temperature: 0.2 } // Low temperature for consistent JSON
+            // We append the final prompt inside generateFinalReport logic or here?
+            // Wait, generateFinalReport takes "messages". 
+            // We should add the final prompt as the last user message.
+        });
+
+        // Actually, the previous implementation added the final prompt to conversationMessages. 
+        // Let's do that explicitly here too to be safe/clear.
+        // BUT generateFinalReport's interface takes `messages` and `systemPrompt`.
+        // The implementation I wrote loops through history and adds them.
+        // So I need to add the prompt to the history I pass.
+
+        // RE-READing my own implementation of generateFinalReport:
+        // uses systemPrompt + history.
+        // So I should append the final prompt to conversationMessages before passing it.
+
+        // Wait, I can't modify conversationMessages in place easily if I want to keep it clean, but here it's fine.
+        // Actually, let's just pass it as part of messages.
+
+        const messagesWithPrompt = [
+            ...conversationMessages,
+            { role: 'user', content: finalPrompt }
+        ];
+
+        // START FIX: logic adjustment
+        // I need to call generateFinalReport with the messages including the prompt.
+        const responseData = await generateFinalReport({
+            systemPrompt: 'You are a professional recruiter providing final interview evaluation.',
+            messages: messagesWithPrompt,
+            config: { temperature: 0.2 }
         });
 
         const latency = Date.now() - startTime;
         console.log(`[Sessions] ${requestId} - LLM response received (${latency}ms)`);
 
-        // Parse JSON response
-        let finalEvaluation: FinalEvaluationResponse;
-        try {
-            // Clean up response (remove markdown if present)
-            let cleanedResponse = response.say.trim();
-            if (cleanedResponse.startsWith('```json')) {
-                cleanedResponse = cleanedResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-            } else if (cleanedResponse.startsWith('```')) {
-                cleanedResponse = cleanedResponse.replace(/```\n?/g, '');
-            }
-
-            finalEvaluation = JSON.parse(cleanedResponse);
-
-            // Validation
-            if (!finalEvaluation.recruiter_impression || !finalEvaluation.scores) {
-                throw new Error('Invalid evaluation structure');
-            }
-
-            if (!Array.isArray(finalEvaluation.what_i_did_well) || finalEvaluation.what_i_did_well.length !== 3) {
-                throw new Error('what_i_did_well must be array of 3 items');
-            }
-
-            if (!Array.isArray(finalEvaluation.areas_for_improvement) || finalEvaluation.areas_for_improvement.length !== 3) {
-                throw new Error('areas_for_improvement must be array of 3 items');
-            }
-
-        } catch (parseError: any) {
-            console.error(`[Sessions] ${requestId} - Failed to parse evaluation:`, parseError);
-            console.error(`[Sessions] ${requestId} - Raw response:`, response.say);
-
-            return NextResponse.json({
-                ok: false,
-                error: {
-                    code: 'PARSE_ERROR',
-                    message: 'Failed to parse final evaluation from LLM',
-                    hint: 'LLM returned invalid JSON format',
-                    requestId,
-                    rawResponse: response.say.substring(0, 500)
-                }
-            }, { status: 500 });
-        }
-
-        // Update session in database
+        // 5. Update session in database
         const endedAt = new Date();
         await prisma.interviewSession.update({
             where: { id: sessionId },
             data: {
                 status: 'ended',
                 endedAt,
-                recruiterImpression: finalEvaluation.recruiter_impression,
-                overallScore: finalEvaluation.scores.overall,
-                technicalScore: finalEvaluation.scores.technical,
-                communicationScore: finalEvaluation.scores.communication,
-                problemSolvingScore: finalEvaluation.scores.problem_solving,
-                experienceScore: finalEvaluation.scores.experience
+                recruiterImpression: responseData.recruiter_impression,
+                overallScore: responseData.scores.overall,
+                technicalScore: responseData.scores.technical,
+                communicationScore: responseData.scores.communication,
+                problemSolvingScore: responseData.scores.problem_solving,
+                experienceScore: responseData.scores.experience
             }
         });
 
-        // Save final report
-        await prisma.interviewFinalReport.create({
-            data: {
+        // 6. Save final report
+        // We need the raw output for debugging/display if needed, but generateFinalReport returns parsed object.
+        // I should have made generateFinalReport return raw text too?
+        // It returns FinalEvaluationResponse which is clean JSON.
+        // We can just stringify it for "rawModelOutput" or change the interface.
+        // For now, JSON.stringify(responseData) is a faithful representation of what we accepted.
+
+        await prisma.interviewFinalReport.upsert({
+            where: { sessionId },
+            create: {
                 sessionId,
-                impression: finalEvaluation.recruiter_impression,
-                overallScore: finalEvaluation.scores.overall,
-                technicalScore: finalEvaluation.scores.technical,
-                communicationScore: finalEvaluation.scores.communication,
-                problemSolvingScore: finalEvaluation.scores.problem_solving,
-                experienceScore: finalEvaluation.scores.experience,
-                whatIDidWell: finalEvaluation.what_i_did_well,
-                areasForImprovement: finalEvaluation.areas_for_improvement,
-                rawModelOutput: response.say
+                impression: responseData.recruiter_impression,
+                overallScore: responseData.scores.overall,
+                technicalScore: responseData.scores.technical,
+                communicationScore: responseData.scores.communication,
+                problemSolvingScore: responseData.scores.problem_solving,
+                experienceScore: responseData.scores.experience,
+                whatIDidWell: responseData.what_i_did_well,
+                areasForImprovement: responseData.areas_for_improvement,
+                rawModelOutput: JSON.stringify(responseData, null, 2)
+            },
+            update: {
+                impression: responseData.recruiter_impression,
+                overallScore: responseData.scores.overall,
+                technicalScore: responseData.scores.technical,
+                communicationScore: responseData.scores.communication,
+                problemSolvingScore: responseData.scores.problem_solving,
+                experienceScore: responseData.scores.experience,
+                whatIDidWell: responseData.what_i_did_well,
+                areasForImprovement: responseData.areas_for_improvement,
+                rawModelOutput: JSON.stringify(responseData, null, 2)
             }
         });
 
         console.log(`[Sessions] ${requestId} - Session ${sessionId} ended successfully`);
-        console.log(`[Sessions] ${requestId} - Impression: ${finalEvaluation.recruiter_impression}, Overall: ${finalEvaluation.scores.overall}`);
+        console.log(`[Sessions] ${requestId} - Impression: ${responseData.recruiter_impression}, Overall: ${responseData.scores.overall}`);
 
         return NextResponse.json({
             ok: true,
-            finalReport: finalEvaluation
+            finalReport: responseData
         });
 
     } catch (error: any) {

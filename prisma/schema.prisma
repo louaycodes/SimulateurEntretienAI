@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,49 +8,45 @@ datasource db {
 }
 
 model InterviewSession {
-  id                    String   @id @default(uuid())
-  createdAt             DateTime @default(now())
-  endedAt               DateTime?
-  role                  String
-  level                 String
-  interviewType         String
-  language              String
-  durationMinutes       Int?
-  status                String   @default("running") // running|ended
-  
-  // Final evaluation (populated on end)
-  recruiterImpression   String?  // Hire|Lean Hire|No Hire
-  overallScore          Int?
-  technicalScore        Int?
-  communicationScore    Int?
-  problemSolvingScore   Int?
-  experienceScore       Int?
-  
-  messages              InterviewMessage[]
-  evaluations           InterviewEvaluation[]
-  finalReport           InterviewFinalReport?
-  
+  id                  String                @id @default(uuid())
+  createdAt           DateTime              @default(now())
+  endedAt             DateTime?
+  role                String
+  level               String
+  interviewType       String
+  language            String
+  durationMinutes     Int?
+  status              String                @default("running")
+  recruiterImpression String?
+  overallScore        Int?
+  technicalScore      Int?
+  communicationScore  Int?
+  problemSolvingScore Int?
+  experienceScore     Int?
+  evaluations         InterviewEvaluation[]
+  finalReport         InterviewFinalReport?
+  messages            InterviewMessage[]
+
   @@map("interview_sessions")
 }
 
 model InterviewMessage {
-  id              String   @id @default(uuid())
-  sessionId       String
-  role            String   // recruiter|user
-  text            String   @db.Text
-  timestampMs     BigInt
-  elapsedSec      Int
-  recruiterMsgId  String?
-  createdAt       DateTime @default(now())
-  
-  session         InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  
+  id             String           @id @default(uuid())
+  sessionId      String
+  role           String
+  text           String
+  timestampMs    BigInt
+  elapsedSec     Int
+  recruiterMsgId String?
+  createdAt      DateTime         @default(now())
+  session        InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
   @@index([sessionId])
   @@map("interview_messages")
 }
 
 model InterviewEvaluation {
-  id                  String   @id @default(uuid())
+  id                  String           @id @default(uuid())
   sessionId           String
   turnIndex           Int
   overallScore        Int
@@ -63,28 +56,26 @@ model InterviewEvaluation {
   experienceScore     Int
   signals             Json?
   notesPrivate        Json?
-  createdAt           DateTime @default(now())
-  
+  createdAt           DateTime         @default(now())
   session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  
+
   @@index([sessionId])
   @@map("interview_evaluations")
 }
 
 model InterviewFinalReport {
-  sessionId              String   @id
-  impression             String   // Hire|Lean Hire|No Hire
-  overallScore           Int
-  technicalScore         Int
-  communicationScore     Int
-  problemSolvingScore    Int
-  experienceScore        Int
-  whatIDidWell           Json     // array of 3 strings
-  areasForImprovement    Json     // array of 3 strings
-  rawModelOutput         String   @db.Text
-  createdAt              DateTime @default(now())
-  
-  session                InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  
+  sessionId           String           @id
+  impression          String
+  overallScore        Int
+  technicalScore      Int
+  communicationScore  Int
+  problemSolvingScore Int
+  experienceScore     Int
+  whatIDidWell        Json
+  areasForImprovement Json
+  rawModelOutput      String
+  createdAt           DateTime         @default(now())
+  session             InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
   @@map("interview_final_reports")
 }

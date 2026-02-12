@@ -5,6 +5,9 @@ export type Level = "junior" | "mid" | "senior";
 export type InterviewType = "HR" | "Tech" | "Mixed";
 export type Language = "FR" | "EN";
 
+// LLM Types
+export type LLMProvider = "groq";
+
 // Incoming WebSocket Messages
 export interface RecruiterQuestionMessage {
     type: "recruiter_question";

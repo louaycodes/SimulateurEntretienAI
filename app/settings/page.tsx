@@ -175,7 +175,7 @@ export default function SettingsPage() {
                                         ) : (
                                             <XCircle className="w-5 h-5 text-red-500" />
                                         )}
-                                        Google Gemini API Status
+                                        Groq API Status
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent>
@@ -186,7 +186,7 @@ export default function SettingsPage() {
                                         <div className="space-y-2">
                                             <p className="text-green-400 font-medium">✅ API Key Configured</p>
                                             <p className="text-sm text-gray-400">
-                                                Your Gemini API is ready to use for interviews.
+                                                Your Groq API is ready to use for interviews.
                                             </p>
                                         </div>
                                     )}
@@ -194,14 +194,14 @@ export default function SettingsPage() {
                                         <div className="space-y-3">
                                             <p className="text-red-400 font-medium">❌ API Key Not Configured</p>
                                             <p className="text-sm text-gray-400">
-                                                To use the AI interview feature, you need to configure your Google Gemini API key.
+                                                To use the AI interview feature, you need to configure your Groq API key.
                                             </p>
                                             <div className="bg-gray-900/50 border border-gray-700 rounded-lg p-4 space-y-2">
                                                 <p className="text-sm font-medium text-gray-300">Setup Instructions:</p>
                                                 <ol className="text-sm text-gray-400 space-y-1 list-decimal list-inside">
-                                                    <li>Get your API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline">Google AI Studio</a></li>
+                                                    <li>Get your free API key from <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline">Groq Console</a></li>
                                                     <li>Create a <code className="bg-gray-800 px-2 py-0.5 rounded text-xs">.env.local</code> file in the project root</li>
-                                                    <li>Add: <code className="bg-gray-800 px-2 py-0.5 rounded text-xs">GEMINI_API_KEY=your_key_here</code></li>
+                                                    <li>Add: <code className="bg-gray-800 px-2 py-0.5 rounded text-xs">GROQ_API_KEY=your_key_here</code></li>
                                                     <li>Restart the development server</li>
                                                 </ol>
                                             </div>

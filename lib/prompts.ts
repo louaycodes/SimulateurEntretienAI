@@ -150,36 +150,50 @@ Be specific, constructive, and professional. The candidate will read this report
  * Final evaluation prompt - sent when interview ends
  * Returns structured JSON with final scores and feedback
  */
-export function buildFinalEvaluationPrompt(): string {
-    return `The interview has now ENDED.
+export function buildFinalEvaluationPrompt(config: InterviewConfig): string {
+  const lang = config.language === "FR" ? "français" : "English";
+  const langInstruction = config.language === "FR"
+    ? "Vous devez répondre en français (les champs JSON clés restent en anglais, mais le contenu des listes doit être en français)."
+    : "You must respond in English.";
 
-Based on the entire conversation, provide your FINAL evaluation in this EXACT JSON format (no markdown, no extra text):
-
-{
-  "recruiter_impression": "Hire" | "Lean Hire" | "No Hire",
-  "scores": {
-    "overall": <0-100 integer>,
-    "technical": <0-100 integer>,
-    "communication": <0-100 integer>,
-    "problem_solving": <0-100 integer>,
-    "experience": <0-100 integer>
-  },
-  "what_i_did_well": [
-    "<concise point 1>",
-    "<concise point 2>",
-    "<concise point 3>"
-  ],
-  "areas_for_improvement": [
-    "<concise point 1>",
-    "<concise point 2>",
-    "<concise point 3>"
-  ]
-}
-
-REQUIREMENTS:
-- Exactly 3 items in each list
-- All scores must be integers 0-100
-- Be honest and strict with scoring (no inflated scores)
-- Return ONLY valid JSON, nothing else
-- No markdown code blocks, no explanations`;
+  return `The interview has now ENDED.
+  
+  You are an expert recruiter.
+  Interview Context:
+  - Role: ${config.role}
+  - Level: ${config.level}
+  - Type: ${config.interviewType}
+  - Language: ${config.language}
+  
+  ${langInstruction}
+  
+  Based on the entire conversation, provide your FINAL evaluation in this EXACT JSON format (no markdown, no extra text):
+  
+  {
+    "recruiter_impression": "Hire" | "Lean Hire" | "No Hire",
+    "scores": {
+      "overall": <0-100 integer>,
+      "technical": <0-100 integer>,
+      "communication": <0-100 integer>,
+      "problem_solving": <0-100 integer>,
+      "experience": <0-100 integer>
+    },
+    "what_i_did_well": [
+      "<concise point 1>",
+      "<concise point 2>",
+      "<concise point 3>"
+    ],
+    "areas_for_improvement": [
+      "<concise point 1>",
+      "<concise point 2>",
+      "<concise point 3>"
+    ]
+  }
+  
+  REQUIREMENTS:
+  - Exactly 3 items in each list
+  - All scores must be integers 0-100
+  - Be honest and strict with scoring (no inflated scores)
+  - Return ONLY valid JSON, nothing else
+  - No markdown code blocks, no explanations`;
 }

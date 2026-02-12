@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { LLMProvider } from "@/lib/llmClient";
+import { LLMProvider } from "@/lib/types";
 
 interface LLMSettings {
     provider: LLMProvider;
@@ -21,23 +21,20 @@ interface LLMState extends LLMSettings {
     getConfig: () => LLMSettings;
 }
 
-const DEFAULT_OLLAMA_URL = "http://localhost:11434";
-const DEFAULT_OPENAI_URL = "http://localhost:1234/v1";
+const DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1";
 
 export const useLLMStore = create<LLMState>()(
     persist(
         (set, get) => ({
-            provider: "ollama",
-            baseUrl: DEFAULT_OLLAMA_URL,
-            model: "deepseek-r1",
-            temperature: 0.7,
+            provider: "groq",
+            baseUrl: DEFAULT_GROQ_URL,
+            model: "llama-3.3-70b-versatile",
+            temperature: 0.4,
             maxTokens: 1000,
             useMockMode: false,
 
             setProvider: (provider) => {
-                const baseUrl = provider === "ollama" ? DEFAULT_OLLAMA_URL : DEFAULT_OPENAI_URL;
-                const model = provider === "ollama" ? "deepseek-r1" : "deepseek";
-                set({ provider, baseUrl, model });
+                set({ provider, baseUrl: DEFAULT_GROQ_URL, model: "llama-3.3-70b-versatile" });
             },
 
             setBaseUrl: (url) => set({ baseUrl: url }),

@@ -17,15 +17,15 @@
 cat .env.local
 
 # Should contain:
-GEMINI_API_KEY=your_api_key_here
+GROQ_API_KEY=your_api_key_here
 ```
 
-**Step 2: Verify Package**
+**Step 2: Verify Environment**
 ```bash
-# Check package.json
-npm list @google/genai
+# Verify GROQ_API_KEY is set
+echo $env:GROQ_API_KEY
 
-# Should show: @google/genai@x.x.x
+# Should show your API key value
 ```
 
 **Step 3: Restart Server**
@@ -99,21 +99,18 @@ Browser permissions not granted
 
 ---
 
-### 3. "Cannot find module '@google/genai'"
+### 3. "401 Unauthorized" from Groq
 
 #### Cause
-Package not installed or wrong version
+API key is invalid or not set
 
 #### Solution
 
 ```bash
-# Remove old package
-npm uninstall @google/generative-ai
+# Check your .env.local has the correct key
+# Get a free key at https://console.groq.com
 
-# Install correct package
-npm install @google/genai
-
-# Restart server
+# Restart server after changing .env.local
 npm run dev
 ```
 
@@ -332,7 +329,6 @@ npm list zustand
 ```
 
 Expected versions:
-- `@google/genai`: Latest
 - `next`: 14.2.x
 - `react`: 18.x
 - `zustand`: 4.x
@@ -372,14 +368,14 @@ npm run dev
 - ✅ npm 9+
 - ✅ Modern browser (Chrome/Edge recommended)
 - ✅ Internet connection
-- ✅ Gemini API key
+- ✅ Groq API key (free at https://console.groq.com)
 
 ---
 
 ## Quick Fixes Checklist
 
-- [ ] API key in `.env.local`
-- [ ] Correct package: `@google/genai` (not `@google/generative-ai`)
+- [ ] `GROQ_API_KEY` in `.env.local`
+- [ ] Key obtained from https://console.groq.com
 - [ ] Server restarted after `.env.local` changes
 - [ ] Browser permissions granted (camera/mic)
 - [ ] Using Chrome or Edge browser

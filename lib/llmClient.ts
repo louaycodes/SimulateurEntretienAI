@@ -1,7 +1,9 @@
 // Centralized LLM Client (Server-Side Only)
-// Uses Gemini REST API with proper contents[] formatting
+// Uses Groq OpenAI-compatible REST API
 
 import https from 'https';
+
+import { LLMProvider } from './types';
 
 // Error codes for typed error handling
 export type LLMErrorCode =
@@ -13,6 +15,7 @@ export type LLMErrorCode =
     | "NETWORK_ERROR"
     | "JSON_PARSE_FAILED"
     | "INVALID_MODEL_JSON"
+    | "MODEL_DEPRECATED"
     | "UNKNOWN_ERROR";
 
 export interface LLMError {
@@ -37,16 +40,17 @@ export class LLMClientError extends Error {
 }
 
 // Configuration
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+const FALLBACK_MODEL = 'llama-3.1-8b-instant';
 
 // Global rate limiter: enforce minimum gap between requests
 let lastRequestTimestamp = 0;
-const MIN_REQUEST_GAP_MS = 1500; // 1.5 seconds between requests
+const MIN_REQUEST_GAP_MS = 500; // 0.5 seconds between requests (Groq is faster)
 
 // Retry configuration
 const MAX_RETRIES = 3;
-const INITIAL_RETRY_DELAY_MS = 5000; // 5 seconds
+const INITIAL_RETRY_DELAY_MS = 3000; // 3 seconds
 
 /**
  * Sleep helper
@@ -56,56 +60,39 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Extract retry delay from Gemini error response (if available)
+ * Single raw request to Groq REST API (no retry)
+ * Uses OpenAI-compatible chat completions endpoint
  */
-function extractRetryDelay(errorData: any): number | null {
-    try {
-        const details = errorData?.error?.details;
-        if (Array.isArray(details)) {
-            for (const detail of details) {
-                if (detail['@type']?.includes('RetryInfo') && detail.retryDelay) {
-                    const delayStr = detail.retryDelay.replace('s', '');
-                    const seconds = parseFloat(delayStr);
-                    if (!isNaN(seconds)) return Math.ceil(seconds * 1000);
-                }
-            }
-        }
-    } catch { }
-    return null;
-}
-
-/**
- * Single raw request to Gemini REST API (no retry)
- */
-async function makeGeminiRequestOnce(
-    contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
-    systemInstruction?: { parts: Array<{ text: string }> }
+async function makeGroqRequestOnce(
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    temperature: number,
+    model: string
 ): Promise<string> {
-    if (!GEMINI_API_KEY) {
+    if (!GROQ_API_KEY) {
         throw new LLMClientError(
             "API_KEY_MISSING",
-            "GEMINI_API_KEY environment variable not set",
-            "Add GEMINI_API_KEY to your .env.local file"
+            "GROQ_API_KEY environment variable not set",
+            "Add GROQ_API_KEY to your .env.local file"
         );
     }
 
-    // Ensure model has "models/" prefix
-    const modelPath = GEMINI_MODEL.startsWith('models/') ? GEMINI_MODEL : `models/${GEMINI_MODEL}`;
-
+    // STRICT OpenAI Request Format
     const requestBody = JSON.stringify({
-        contents,
-        systemInstruction,
-        generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2048,
-        }
+        model,
+        messages: messages.map(m => ({
+            role: m.role,
+            content: m.content
+        })),
+        temperature,
+        stream: false
     });
 
     const options = {
-        hostname: 'generativelanguage.googleapis.com',
-        path: `/v1beta/${modelPath}:generateContent?key=${GEMINI_API_KEY}`,
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
         method: 'POST',
         headers: {
+            'Authorization': `Bearer ${GROQ_API_KEY}`,
             'Content-Type': 'application/json',
             'Content-Length': Buffer.byteLength(requestBody)
         }
@@ -123,7 +110,7 @@ async function makeGeminiRequestOnce(
 
             res.on('end', () => {
                 const latency = Date.now() - startTime;
-                console.log(`[LLM] Provider: Gemini, Model: ${GEMINI_MODEL}, Status: ${res.statusCode}, Latency: ${latency}ms`);
+                console.log(`[LLM] Provider: Groq, Model: ${model}, Status: ${res.statusCode}, Latency: ${latency}ms`);
 
                 // Handle HTTP errors
                 if (res.statusCode !== 200) {
@@ -135,40 +122,57 @@ async function makeGeminiRequestOnce(
                     }
 
                     // Log full error details
-                    console.error(`[LLM] Gemini Error Details:`, JSON.stringify(errorData, null, 2));
+                    console.error(`[LLM] Groq Error Details:`, JSON.stringify(errorData, null, 2));
 
-                    // Map Gemini error to typed error
+                    // Map Groq/OpenAI error to typed error
                     if (res.statusCode === 400) {
+                        // Check if it's a model usage error (often 400 or 404 depending on API)
+                        const msg = errorData.error?.message?.toLowerCase() || '';
+                        if (msg.includes('model') && (msg.includes('deprecated') || msg.includes('not found') || msg.includes('access'))) {
+                            reject(new LLMClientError(
+                                "MODEL_DEPRECATED",
+                                `Model '${model}' issue: ${errorData.error?.message}`,
+                                "Model might be deprecated or invalid.",
+                                errorData
+                            ));
+                            return;
+                        }
+
                         const message = errorData.error?.message || 'Invalid request';
                         reject(new LLMClientError(
                             "INVALID_ARGUMENT",
                             message,
-                            "Check request format. Gemini requires contents[] array with at least one message.",
+                            "Check request format. Groq expects OpenAI-compatible messages array.",
                             errorData
                         ));
-                    } else if (res.statusCode === 403) {
+                    } else if (res.statusCode === 401) {
                         reject(new LLMClientError(
                             "PERMISSION_DENIED",
-                            errorData.error?.message || "Invalid API key or permission denied",
-                            "Check your GEMINI_API_KEY in .env.local",
+                            errorData.error?.message || "Invalid API key",
+                            "Check your GROQ_API_KEY in .env.local",
                             errorData
                         ));
                     } else if (res.statusCode === 404) {
                         reject(new LLMClientError(
-                            "NOT_FOUND",
-                            `Model '${GEMINI_MODEL}' not found`,
-                            "Try 'gemini-1.5-flash' or 'gemini-1.5-pro'",
+                            "MODEL_DEPRECATED",
+                            `Model '${model}' not found (404)`,
+                            "Check if model exists.",
                             errorData
                         ));
                     } else if (res.statusCode === 429) {
-                        // Attach errorData for retry delay extraction
-                        const err = new LLMClientError(
+                        reject(new LLMClientError(
                             "RESOURCE_EXHAUSTED",
-                            "API quota exceeded or rate limited",
-                            "Wait a moment and try again, or upgrade your plan",
+                            "API rate limit reached",
+                            "Wait a moment and try again. Groq free tier has rate limits.",
                             errorData
-                        );
-                        reject(err);
+                        ));
+                    } else if (res.statusCode! >= 500) {
+                        reject(new LLMClientError(
+                            "UNKNOWN_ERROR",
+                            `Groq provider error (HTTP ${res.statusCode})`,
+                            "Groq may be experiencing issues. Try again later.",
+                            errorData
+                        ));
                     } else {
                         reject(new LLMClientError(
                             "UNKNOWN_ERROR",
@@ -194,29 +198,28 @@ async function makeGeminiRequestOnce(
                     return;
                 }
 
-                // Extract text from Gemini response
-                if (!response.candidates || !Array.isArray(response.candidates) || response.candidates.length === 0) {
+                // Extract text from OpenAI-compatible response
+                if (!response.choices || !Array.isArray(response.choices) || response.choices.length === 0) {
                     reject(new LLMClientError(
                         "JSON_PARSE_FAILED",
-                        "Missing candidates array in response",
+                        "Missing choices array in response",
                         "API response structure is invalid",
                         response
                     ));
                     return;
                 }
 
-                const candidate = response.candidates[0];
-                if (!candidate.content || !candidate.content.parts || !Array.isArray(candidate.content.parts)) {
+                const text = response.choices[0]?.message?.content;
+                if (!text || typeof text !== 'string') {
                     reject(new LLMClientError(
                         "JSON_PARSE_FAILED",
-                        "Missing content.parts in response",
+                        "Missing message.content in response",
                         "API response structure is invalid",
                         response
                     ));
                     return;
                 }
 
-                const text = candidate.content.parts.map((p: any) => p.text).join('');
                 resolve(text);
             });
         });
@@ -236,11 +239,11 @@ async function makeGeminiRequestOnce(
 }
 
 /**
- * Make a request to Gemini REST API with retry + exponential backoff for 429 errors
+ * Make a request to Groq REST API with retry + exponential backoff + fallback model
  */
-async function makeGeminiRequest(
-    contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
-    systemInstruction?: { parts: Array<{ text: string }> }
+async function makeGroqRequest(
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+    temperature: number = 0.4
 ): Promise<string> {
     // Global rate limiting: wait if we're sending too fast
     const now = Date.now();
@@ -253,30 +256,43 @@ async function makeGeminiRequest(
     lastRequestTimestamp = Date.now();
 
     let lastError: LLMClientError | null = null;
+    let currentModel = GROQ_MODEL;
+    let isFallback = false;
+
+    // We allow retries. If we hit a model error, we switch to fallback and reset retry count partially?
+    // Or simpler: Just standard retries. If error is MODEL_DEPRECATED and NOT fallback, switch and continue.
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const result = await makeGeminiRequestOnce(contents, systemInstruction);
+            const result = await makeGroqRequestOnce(messages, temperature, currentModel);
             return result;
         } catch (error) {
-            if (error instanceof LLMClientError && error.code === 'RESOURCE_EXHAUSTED') {
-                lastError = error;
+            lastError = error instanceof LLMClientError ? error : new LLMClientError("UNKNOWN_ERROR", "Unknown error", "", error);
 
+            if (lastError.code === 'RESOURCE_EXHAUSTED') {
                 if (attempt < MAX_RETRIES) {
-                    // Extract server-suggested delay or use exponential backoff
-                    const serverDelay = extractRetryDelay(error.details);
                     const backoffDelay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt);
-                    const delay = serverDelay || backoffDelay;
-
-                    console.warn(`[LLM] Rate limited (429). Retry ${attempt + 1}/${MAX_RETRIES} after ${Math.ceil(delay / 1000)}s...`);
-                    await sleep(delay);
+                    console.warn(`[LLM] Rate limited (429). Retry ${attempt + 1}/${MAX_RETRIES} after ${Math.ceil(backoffDelay / 1000)}s...`);
+                    await sleep(backoffDelay);
                     lastRequestTimestamp = Date.now();
-                    continue;
+                    continue; // Retry loop
                 }
-
-                console.error(`[LLM] Rate limited - all ${MAX_RETRIES} retries exhausted`);
+            } else if (lastError.code === 'MODEL_DEPRECATED') {
+                if (!isFallback) {
+                    console.warn(`[LLM] Model '${currentModel}' deprecated/not found. Switching to fallback '${FALLBACK_MODEL}'.`);
+                    currentModel = FALLBACK_MODEL;
+                    isFallback = true;
+                    // Don't count this as a retry attempt, or do? 
+                    // Let's just continue loop. If attempt was 0, it becomes 1. 
+                    // If we want to guarantee retries for fallback too, we might need more logic.
+                    // But usually switching model works immediately if quota/rate limit allows.
+                    continue;
+                } else {
+                    // Already fallback failed
+                    throw lastError;
+                }
             } else {
-                // Non-retryable error, throw immediately
+                // Non-retryable error
                 throw error;
             }
         }
@@ -285,8 +301,8 @@ async function makeGeminiRequest(
     // All retries failed
     throw lastError || new LLMClientError(
         "RESOURCE_EXHAUSTED",
-        "API quota exceeded after all retries",
-        "Wait a few minutes and try again, or upgrade your plan"
+        "API rate limit exceeded after all retries",
+        "Wait a few minutes and try again"
     );
 }
 
@@ -331,17 +347,17 @@ function extractJSON(text: string): any {
  * Ping test - minimal request to verify API connectivity
  */
 export async function ping(): Promise<{ ok: true; provider: string; model: string }> {
-    const contents = [
-        { role: 'user' as const, parts: [{ text: 'Return STRICT JSON only: {"ok": true, "msg": "pong"}. No markdown, no explanation.' }] }
+    const messages = [
+        { role: 'user' as const, content: 'Return JSON only. No markdown. No explanation. Just: {"ok": true, "msg": "pong"}' }
     ];
 
-    const response = await makeGeminiRequest(contents);
+    const response = await makeGroqRequest(messages);
     const json = extractJSON(response);
 
     return {
         ok: true,
-        provider: 'Gemini',
-        model: GEMINI_MODEL
+        provider: 'Groq',
+        model: GROQ_MODEL // Report configured model, even if fallback used internally (might be confusing but OK for now)
     };
 }
 
@@ -372,34 +388,35 @@ export interface RecruiterResponse {
 }
 
 export async function nextTurn(options: NextTurnOptions): Promise<RecruiterResponse> {
-    const { systemPrompt, messages } = options;
+    const { systemPrompt, messages: history } = options;
 
-    // Build systemInstruction
-    const systemInstruction = {
-        parts: [{ text: systemPrompt }]
-    };
+    // Build OpenAI-compatible messages array
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
-    // Build contents array from messages
-    const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+    // System prompt with strict JSON enforcement
+    messages.push({
+        role: 'system',
+        content: systemPrompt + '\n\nIMPORTANT: Return JSON only. No markdown. No code blocks. No explanation.'
+    });
 
     // CRITICAL: If no messages (init call), add a starter user message
-    if (messages.length === 0) {
-        contents.push({
+    if (history.length === 0) {
+        messages.push({
             role: 'user',
-            parts: [{ text: 'Start the interview now. Ask the first question. Return JSON only in the exact format specified in the system instruction.' }]
+            content: 'Start the interview now. Ask the first question. Return JSON only in the exact format specified in the system instruction.'
         });
     } else {
-        // Convert message history to Gemini format
-        for (const msg of messages) {
-            contents.push({
-                role: msg.role === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.content }]
+        // Convert message history
+        for (const msg of history) {
+            messages.push({
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: msg.content
             });
         }
     }
 
     // Make request
-    const response = await makeGeminiRequest(contents, systemInstruction);
+    const response = await makeGroqRequest(messages);
 
     // Extract and validate JSON
     const json = extractJSON(response);
@@ -454,12 +471,19 @@ export interface InterviewSummary {
 export async function generateSummary(options: SummaryOptions): Promise<InterviewSummary> {
     const { summaryPrompt } = options;
 
-    const contents = [
-        { role: 'user' as const, parts: [{ text: summaryPrompt }] }
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+        {
+            role: 'system',
+            content: 'You are an expert interview evaluator. Return JSON only. No markdown. No code blocks. No explanation.'
+        },
+        {
+            role: 'user',
+            content: summaryPrompt
+        }
     ];
 
     // Make request
-    const response = await makeGeminiRequest(contents);
+    const response = await makeGroqRequest(messages);
 
     // Extract and validate JSON
     const json = extractJSON(response);
@@ -475,4 +499,61 @@ export async function generateSummary(options: SummaryOptions): Promise<Intervie
     }
 
     return json as InterviewSummary;
+}
+
+export interface FinalEvaluationResponse {
+    recruiter_impression: 'Hire' | 'Lean Hire' | 'No Hire';
+    scores: {
+        overall: number;
+        technical: number;
+        communication: number;
+        problem_solving: number;
+        experience: number;
+    };
+    what_i_did_well: string[];
+    areas_for_improvement: string[];
+}
+
+export interface FinalReportOptions {
+    systemPrompt: string;
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    config?: {
+        temperature?: number;
+    };
+}
+
+export async function generateFinalReport(options: FinalReportOptions): Promise<FinalEvaluationResponse> {
+    const { systemPrompt, messages: history, config } = options;
+
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+
+    messages.push({
+        role: 'system',
+        content: systemPrompt + '\n\nIMPORTANT: Return JSON only. No markdown. No code blocks. No explanation.'
+    });
+
+    for (const msg of history) {
+        messages.push({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+        });
+    }
+
+    // Force strict JSON in the last user message if not present?
+    // Actually, the system prompt is enough usually.
+
+    const response = await makeGroqRequest(messages, config?.temperature ?? 0.2);
+    const json = extractJSON(response);
+
+    // Validate structure
+    if (!json.recruiter_impression || !json.scores || !json.what_i_did_well || !json.areas_for_improvement) {
+        throw new LLMClientError(
+            "INVALID_MODEL_JSON",
+            "Missing fields in final report",
+            "Report must include impression, scores, and feedback lists",
+            json
+        );
+    }
+
+    return json as FinalEvaluationResponse;
 }

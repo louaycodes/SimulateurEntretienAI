@@ -6,7 +6,7 @@ A professional AI-powered interview simulator that helps candidates practice tec
 
 ## ✨ Key Features
 
-- **Live AI Recruiter**: Interactive voice-based interviews using Google Gemini.
+- **Live AI Recruiter**: Interactive voice-based interviews powered by Groq (LLama 3.1).
 - **Real-time Transcription**: Speak naturally and see your words converted to text instantly.
 - **Adaptive Questions**: Questions evolve based on your role (DevOps, Backend, Data, etc.) and seniority.
 - **Comprehensive Feedback**: Get a detailed report with scores (0-100) for Technical, Communication, and Problem Solving skills.
@@ -17,7 +17,7 @@ A professional AI-powered interview simulator that helps candidates practice tec
 
 - **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, Framer Motion, Zustand
 - **Backend API**: Next.js API Routes (Serverless)
-- **AI/LLM**: Google Gemini API (`gemini-2.0-flash`)
+- **AI/LLM**: Groq API (`llama-3.3-70b-versatile`) — free tier available
 - **Database**: PostgreSQL (via Docker), Prisma ORM
 - **Media**: Web Speech API (Recognition & Synthesis)
 
@@ -27,7 +27,7 @@ A professional AI-powered interview simulator that helps candidates practice tec
 
 - Node.js 18+
 - Docker & Docker Compose (for the database)
-- A Google Gemini API Key (Get it [here](https://aistudio.google.com/app/apikey))
+- A Groq API Key (Get your free key at [console.groq.com](https://console.groq.com))
 
 ### Installation
 
@@ -47,7 +47,7 @@ A professional AI-powered interview simulator that helps candidates practice tec
    ```bash
    cp .env.example .env.local
    ```
-   Edit `.env.local` and set `GEMINI_API_KEY`.
+   Edit `.env.local` and set `GROQ_API_KEY`.
 
 4. **Start the Database**
    ```bash
@@ -101,7 +101,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ## 🐛 Troubleshooting
 
-- **429 Resource Exhausted**: The Gemini Free Tier has rate limits. Wait a minute and try again.
+- **429 Rate Limited**: The Groq free tier has rate limits. Wait a moment and try again.
 - **Speech Recognition Not Working**: Use Chrome or Edge. Ensure microphone permissions are granted.
 - **Database Connection Error**: Ensure Docker is running (`docker ps`) and you ran `npm run db:up`.
 - **Microphone Echo**: Use headphones for the best experience.
