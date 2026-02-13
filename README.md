@@ -33,7 +33,7 @@
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/ai-interview-simulator.git
+   git clone https://github.com/louaycodes/SimulateurEntretienAI.git
    cd ai-interview-simulator
    ```
 
