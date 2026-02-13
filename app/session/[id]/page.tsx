@@ -78,6 +78,32 @@ export default function SessionReviewPage() {
         );
     }
 
+    // Check for running/processing status
+    const isProcessing = session.status === 'running' || (!session.feedback && !session.scores);
+
+    if (isProcessing) {
+        return (
+            <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
+                <Card className="max-w-md w-full mx-4">
+                    <CardContent className="text-center py-12">
+                        <div className="mb-6 relative">
+                            <div className="w-16 h-16 border-4 border-primary-200 border-t-primary-600 rounded-full animate-spin mx-auto" />
+                        </div>
+                        <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                            Analyzing Interview
+                        </h2>
+                        <p className="text-gray-600 dark:text-gray-400 mb-6">
+                            The AI recruiter is generating your final report. This may take a minute.
+                        </p>
+                        <Button onClick={() => window.location.reload()}>
+                            Refresh Status
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
     const impressionColors = {
         Hire: "text-green-500",
         "Lean Hire": "text-yellow-500",
@@ -172,58 +198,64 @@ export default function SessionReviewPage() {
 
                 {/* Feedback */}
                 {session.feedback && (
-                    <div className="grid md:grid-cols-2 gap-6 mb-8">
-                        <motion.div
-                            initial={{ opacity: 0, x: -20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                        >
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2 text-green-600 dark:text-green-500">
-                                        <TrendingUp className="w-5 h-5" />
-                                        What You Did Well
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <ul className="space-y-3">
-                                        {session.feedback.strengths.map((strength, index) => (
-                                            <li key={index} className="flex items-start gap-2">
-                                                <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                                                <span className="text-gray-700 dark:text-gray-300">
-                                                    {strength}
-                                                </span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </CardContent>
-                            </Card>
-                        </motion.div>
+                    <div className={clsx("grid gap-6 mb-8", session.feedback.strengths.length > 0 && session.feedback.improvements.length > 0 ? "md:grid-cols-2" : "md:grid-cols-1")}>
+                        {/* Strengths - Only show if there are any */}
+                        {session.feedback.strengths.length > 0 && (
+                            <motion.div
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                            >
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle className="flex items-center gap-2 text-green-600 dark:text-green-500">
+                                            <TrendingUp className="w-5 h-5" />
+                                            What You Did Well
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <ul className="space-y-3">
+                                            {session.feedback.strengths.map((strength, index) => (
+                                                <li key={index} className="flex items-start gap-2">
+                                                    <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                                                    <span className="text-gray-700 dark:text-gray-300">
+                                                        {strength}
+                                                    </span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </CardContent>
+                                </Card>
+                            </motion.div>
+                        )}
 
-                        <motion.div
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                        >
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle className="flex items-center gap-2 text-orange-600 dark:text-orange-500">
-                                        <TrendingDown className="w-5 h-5" />
-                                        Areas for Improvement
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <ul className="space-y-3">
-                                        {session.feedback.improvements.map((improvement, index) => (
-                                            <li key={index} className="flex items-start gap-2">
-                                                <AlertCircle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
-                                                <span className="text-gray-700 dark:text-gray-300">
-                                                    {improvement}
-                                                </span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </CardContent>
-                            </Card>
-                        </motion.div>
+                        {/* Weaknesses - Only show if there are any */}
+                        {session.feedback.improvements.length > 0 && (
+                            <motion.div
+                                initial={{ opacity: 0, x: 20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                            >
+                                <Card>
+                                    <CardHeader>
+                                        <CardTitle className="flex items-center gap-2 text-orange-600 dark:text-orange-500">
+                                            <TrendingDown className="w-5 h-5" />
+                                            Areas for Improvement
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                        <ul className="space-y-3">
+                                            {session.feedback.improvements.map((improvement, index) => (
+                                                <li key={index} className="flex items-start gap-2">
+                                                    <AlertCircle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
+                                                    <span className="text-gray-700 dark:text-gray-300">
+                                                        {improvement}
+                                                    </span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </CardContent>
+                                </Card>
+                            </motion.div>
+                        )}
                     </div>
                 )}
 

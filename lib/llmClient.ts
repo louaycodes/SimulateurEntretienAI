@@ -377,7 +377,7 @@ export interface RecruiterResponse {
     say: string;
     type: "question" | "followup" | "closing";
     rubric: "hr" | "tech" | "closing";
-    evaluation: {
+    evaluation?: {
         total_score: number;
         technical_score: number;
         communication_score: number;
@@ -431,14 +431,11 @@ export async function nextTurn(options: NextTurnOptions): Promise<RecruiterRespo
         );
     }
 
+    /*
     if (!json.evaluation || typeof json.evaluation !== 'object') {
-        throw new LLMClientError(
-            "INVALID_MODEL_JSON",
-            "Missing or invalid 'evaluation' field",
-            "AI response must include evaluation scores",
-            json
-        );
+        // Evaluation is now optional per user request to not output scores during turns
     }
+    */
 
     return json as RecruiterResponse;
 }
@@ -503,15 +500,13 @@ export async function generateSummary(options: SummaryOptions): Promise<Intervie
 
 export interface FinalEvaluationResponse {
     recruiter_impression: 'Hire' | 'Lean Hire' | 'No Hire';
-    scores: {
-        overall: number;
-        technical: number;
-        communication: number;
-        problem_solving: number;
-        experience: number;
+    metrics: {
+        total_score: number;
+        technical_score: number;
+        communication_score: number;
+        problem_solving_score: number;
     };
-    what_i_did_well: string[];
-    areas_for_improvement: string[];
+    weaknesses: string[];
 }
 
 export interface FinalReportOptions {
@@ -546,11 +541,11 @@ export async function generateFinalReport(options: FinalReportOptions): Promise<
     const json = extractJSON(response);
 
     // Validate structure
-    if (!json.recruiter_impression || !json.scores || !json.what_i_did_well || !json.areas_for_improvement) {
+    if (!json.recruiter_impression || !json.metrics || !json.weaknesses) {
         throw new LLMClientError(
             "INVALID_MODEL_JSON",
             "Missing fields in final report",
-            "Report must include impression, scores, and feedback lists",
+            "Report must include impression, metrics, and weaknesses",
             json
         );
     }

@@ -15,8 +15,6 @@
         "db:push": "prisma db push"
     },
     "dependencies": {
-        "@google/genai": "^1.39.0",
-        "@google/generative-ai": "^0.24.1",
         "@hookform/resolvers": "^3.3.4",
         "@prisma/client": "^5.22.0",
         "clsx": "^2.1.1",

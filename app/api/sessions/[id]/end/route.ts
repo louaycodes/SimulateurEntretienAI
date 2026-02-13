@@ -62,43 +62,26 @@ export async function POST(
         // 4. Call LLM for final evaluation
         console.log(`[Sessions] ${requestId} - Requesting final evaluation from Groq`);
 
-        const finalEvaluation = await generateFinalReport({
-            systemPrompt: 'You are a professional recruiter providing final interview evaluation.',
-            messages: conversationMessages,
-            config: { temperature: 0.2 } // Low temperature for consistent JSON
-            // We append the final prompt inside generateFinalReport logic or here?
-            // Wait, generateFinalReport takes "messages". 
-            // We should add the final prompt as the last user message.
-        });
-
-        // Actually, the previous implementation added the final prompt to conversationMessages. 
-        // Let's do that explicitly here too to be safe/clear.
-        // BUT generateFinalReport's interface takes `messages` and `systemPrompt`.
-        // The implementation I wrote loops through history and adds them.
-        // So I need to add the prompt to the history I pass.
-
-        // RE-READing my own implementation of generateFinalReport:
-        // uses systemPrompt + history.
-        // So I should append the final prompt to conversationMessages before passing it.
-
-        // Wait, I can't modify conversationMessages in place easily if I want to keep it clean, but here it's fine.
-        // Actually, let's just pass it as part of messages.
-
         const messagesWithPrompt = [
             ...conversationMessages,
             { role: 'user', content: finalPrompt }
         ];
 
-        // START FIX: logic adjustment
-        // I need to call generateFinalReport with the messages including the prompt.
-        const responseData = await generateFinalReport({
-            systemPrompt: 'You are a professional recruiter providing final interview evaluation.',
-            messages: messagesWithPrompt,
-            config: { temperature: 0.2 }
-        });
+        let responseData;
+        try {
+            responseData = await generateFinalReport({
+                systemPrompt: 'You are a professional recruiter providing final interview evaluation.',
+                messages: messagesWithPrompt,
+                config: { temperature: 0.2 }
+            });
+        } catch (llmError: any) {
+            console.error(`[Sessions] ${requestId} - LLM generation failed:`, llmError);
+            throw new Error(`LLM generation failed: ${llmError.message}`);
+        }
 
         const latency = Date.now() - startTime;
         console.log(`[Sessions] ${requestId} - LLM response received (${latency}ms)`);
+        console.log(`[Sessions] ${requestId} - Impression: ${responseData.recruiter_impression}, Score: ${responseData.metrics?.total_score}`);
 
         // 5. Update session in database
         const endedAt = new Date();
@@ -108,50 +91,48 @@ export async function POST(
                 status: 'ended',
                 endedAt,
                 recruiterImpression: responseData.recruiter_impression,
-                overallScore: responseData.scores.overall,
-                technicalScore: responseData.scores.technical,
-                communicationScore: responseData.scores.communication,
-                problemSolvingScore: responseData.scores.problem_solving,
-                experienceScore: responseData.scores.experience
+                overallScore: responseData.metrics.total_score,
+                technicalScore: responseData.metrics.technical_score,
+                communicationScore: responseData.metrics.communication_score,
+                problemSolvingScore: responseData.metrics.problem_solving_score,
+                // experienceScore is not requested in new JSON, use 0 or omit if optional (it is optional in Prisma usually, or default 0)
+                // Checking previous schema, it might be Int? Let's check prisma schema if possible, or just pass 0.
+                // Re-checking types.ts: experienceScore is in SessionData.
+                // In prompt we removed experience_score.
+                experienceScore: 0
             }
         });
 
         // 6. Save final report
-        // We need the raw output for debugging/display if needed, but generateFinalReport returns parsed object.
-        // I should have made generateFinalReport return raw text too?
-        // It returns FinalEvaluationResponse which is clean JSON.
-        // We can just stringify it for "rawModelOutput" or change the interface.
-        // For now, JSON.stringify(responseData) is a faithful representation of what we accepted.
-
         await prisma.interviewFinalReport.upsert({
             where: { sessionId },
             create: {
                 sessionId,
                 impression: responseData.recruiter_impression,
-                overallScore: responseData.scores.overall,
-                technicalScore: responseData.scores.technical,
-                communicationScore: responseData.scores.communication,
-                problemSolvingScore: responseData.scores.problem_solving,
-                experienceScore: responseData.scores.experience,
-                whatIDidWell: responseData.what_i_did_well,
-                areasForImprovement: responseData.areas_for_improvement,
+                overallScore: responseData.metrics.total_score,
+                technicalScore: responseData.metrics.technical_score,
+                communicationScore: responseData.metrics.communication_score,
+                problemSolvingScore: responseData.metrics.problem_solving_score,
+                experienceScore: 0,
+                whatIDidWell: [], // Not requested
+                areasForImprovement: responseData.weaknesses,
                 rawModelOutput: JSON.stringify(responseData, null, 2)
             },
             update: {
                 impression: responseData.recruiter_impression,
-                overallScore: responseData.scores.overall,
-                technicalScore: responseData.scores.technical,
-                communicationScore: responseData.scores.communication,
-                problemSolvingScore: responseData.scores.problem_solving,
-                experienceScore: responseData.scores.experience,
-                whatIDidWell: responseData.what_i_did_well,
-                areasForImprovement: responseData.areas_for_improvement,
+                overallScore: responseData.metrics.total_score,
+                technicalScore: responseData.metrics.technical_score,
+                communicationScore: responseData.metrics.communication_score,
+                problemSolvingScore: responseData.metrics.problem_solving_score,
+                experienceScore: 0,
+                whatIDidWell: [], // Not requested
+                areasForImprovement: responseData.weaknesses,
                 rawModelOutput: JSON.stringify(responseData, null, 2)
             }
         });
 
         console.log(`[Sessions] ${requestId} - Session ${sessionId} ended successfully`);
-        console.log(`[Sessions] ${requestId} - Impression: ${responseData.recruiter_impression}, Overall: ${responseData.scores.overall}`);
+        console.log(`[Sessions] ${requestId} - Impression: ${responseData.recruiter_impression}, Overall: ${responseData.metrics.total_score}`);
 
         return NextResponse.json({
             ok: true,

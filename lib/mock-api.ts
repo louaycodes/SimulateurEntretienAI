@@ -34,6 +34,7 @@ function mapSessionToData(dbSession: any): SessionData {
 
     return {
         id: dbSession.id,
+        status: dbSession.status,
         config: {
             role: dbSession.role as Role,
             level: dbSession.level as Level,

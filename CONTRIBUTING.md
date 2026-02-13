@@ -20,7 +20,7 @@ Thank you for your interest in contributing to Skill-Sphere! We welcome contribu
    ```
 
 4. **Environment Variables**
-   Copy `.env.example` to `.env.local` and add your Google Gemini API key.
+   Copy `.env.example` to `.env.local` and add your Groq API key.
 
 ## Code Style
 

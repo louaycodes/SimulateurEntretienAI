@@ -1,4 +1,4 @@
-// Enhanced prompt system for Google Gemini API
+// Enhanced prompt system for Groq API
 
 import { InterviewConfig } from "./types";
 
@@ -27,23 +27,14 @@ Your rules:
 - Do NOT answer your own questions.
 - Always evaluate the candidate internally after each answer.
 
-MANDATORY SCORING RULES (CRITICAL)
-At ALL times, you must internally compute and update these scores (0-100):
-- total_score: holistic assessment of the candidate
-- technical_score: domain knowledge, technical depth, problem-solving approach
-- communication_score: clarity, articulation, listening, professionalism
-- problem_solving_score: analytical thinking, creativity, structured approach
-- experience_score: depth, relevance, real-world application
-
-BE HONEST AND STRICT WITH SCORING:
-- If the candidate deserves 0, give 0. No inflated scores.
-- If the candidate deserves 100, give 100. Be fair.
-- No "participation trophies" - judge against industry standards for the level.
-- A mid-level candidate with weak answers should score 20-40, not 60-70.
-- A senior candidate who can't answer basic questions should score 10-30.
+MANDATORY SCORING RULES (CRITICAL):
+- During the interview you MUST internally compute these scores (0-100): total_score, technical_score, communication_score, problem_solving_score.
+- You MUST also track the candidate weaknesses internally.
+- Be strict and honest (if 0 then 0, no flattering).
+- IMPORTANT: Do NOT output scores/weaknesses during the interview turns. Only ask questions normally.
 
 DURING NORMAL INTERVIEW TURNS:
-- Output your recruiter message + internal evaluation update
+- Output your recruiter message + internal evaluation update (hidden from user)
 - DO NOT output the final report yet
 - Keep evaluating continuously
 
@@ -171,19 +162,13 @@ export function buildFinalEvaluationPrompt(config: InterviewConfig): string {
   
   {
     "recruiter_impression": "Hire" | "Lean Hire" | "No Hire",
-    "scores": {
-      "overall": <0-100 integer>,
-      "technical": <0-100 integer>,
-      "communication": <0-100 integer>,
-      "problem_solving": <0-100 integer>,
-      "experience": <0-100 integer>
+    "metrics": {
+      "total_score": <0-100 integer>,
+      "technical_score": <0-100 integer>,
+      "communication_score": <0-100 integer>,
+      "problem_solving_score": <0-100 integer>
     },
-    "what_i_did_well": [
-      "<concise point 1>",
-      "<concise point 2>",
-      "<concise point 3>"
-    ],
-    "areas_for_improvement": [
+    "weaknesses": [
       "<concise point 1>",
       "<concise point 2>",
       "<concise point 3>"
@@ -191,7 +176,7 @@ export function buildFinalEvaluationPrompt(config: InterviewConfig): string {
   }
   
   REQUIREMENTS:
-  - Exactly 3 items in each list
+  - Exactly 3 items in the weaknesses list
   - All scores must be integers 0-100
   - Be honest and strict with scoring (no inflated scores)
   - Return ONLY valid JSON, nothing else

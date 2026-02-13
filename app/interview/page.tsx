@@ -31,7 +31,7 @@ import clsx from "clsx";
 import { RecruiterAvatar } from "@/components/RecruiterAvatar";
 import { TranscriptLive, StreamingMessage } from "@/components/TranscriptLive";
 import { createSpeechRecognition, TextInputRecognition } from "@/lib/speech";
-import { GeminiClient } from "@/lib/geminiClient";
+
 import { buildInterviewSystemPrompt } from "@/lib/prompts";
 import FilmTranscript from "@/components/FilmTranscript"; // Keep for now or remove if fully replaced
 import SubtitlesOverlay from "@/components/SubtitlesOverlay";
@@ -49,7 +49,7 @@ export default function InterviewPage() {
     const streamRef = useRef<MediaStream | null>(null);
     const cleanupAudioLevelRef = useRef<(() => void) | null>(null);
     const speechRecognitionRef = useRef<any>(null);
-    const geminiClientRef = useRef<GeminiClient | null>(null);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     // TTS Queue Ref
@@ -185,10 +185,7 @@ export default function InterviewPage() {
         };
     }, [selectedAudioInput, selectedVideoInput, showToast, setAudioLevel, status]);
 
-    // Initialize Gemini client
-    useEffect(() => {
-        geminiClientRef.current = new GeminiClient();
-    }, []);
+
 
     // Generate next recruiter question or initialize interview
     const generateRecruiterQuestion = useCallback(async (candidateText?: string) => {

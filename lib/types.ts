@@ -141,11 +141,12 @@ export interface SessionConfig {
     duration: number;
 }
 
-// Alias for compatibility with new Gemini client
+
 export type InterviewConfig = SessionConfig;
 
 export interface SessionData {
     id: string;
+    status: "running" | "ended" | "paused"; // Add status
     config: SessionConfig;
     startTime: number;
     endTime?: number;

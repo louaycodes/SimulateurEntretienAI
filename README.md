@@ -1,111 +1,94 @@
-# 🎯 Skill-Sphere - AI Interview Simulator
+# AI Interview Simulator (Groq + Next.js + PostgreSQL)
 
-![Next.js](https://img.shields.io/badge/Next.js-14-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue) ![Tailwind](https://img.shields.io/badge/Tailwind-3.0-cyan) ![License](https://img.shields.io/badge/License-MIT-green)
+## Features
+- **Live AI Interview**: Powered by Groq (Llama 3.3 70B) for ultra-fast responses.
+- **Real-time Speech Transcription**: Web Speech API integration for seamless voice interaction.
+- **AI Voice Recruiter**: Text-to-Speech synthesis for a realistic interview experience.
+- **Automatic Scoring**: Real-time evaluation of:
+  - Technical Skills
+  - Communication
+  - Problem Solving
+  - Overall Performance
+- **Weakness Analysis**: Detailed feedback on areas for improvement.
+- **Persistent Session Storage**: Save and review past interviews using PostgreSQL.
+- **Final Report Dashboard**: Comprehensive performance analytics.
 
-A professional AI-powered interview simulator that helps candidates practice technical interviews with real-time voice feedback, live transcription, and comprehensive scoring.
+## Tech Stack
+- **Framework**: Next.js 14 (App Router)
+- **Language**: TypeScript
+- **AI Model**: Groq API (Llama 3.3 70B Versatile / Llama 3.1 8B Instant)
+- **Database**: PostgreSQL
+- **ORM**: Prisma
+- **Speech**: Web Speech API (Browser Native)
+- **Styling**: Tailwind CSS + Framer Motion
 
-## ✨ Key Features
-
-- **Live AI Recruiter**: Interactive voice-based interviews powered by Groq (LLama 3.1).
-- **Real-time Transcription**: Speak naturally and see your words converted to text instantly.
-- **Adaptive Questions**: Questions evolve based on your role (DevOps, Backend, Data, etc.) and seniority.
-- **Comprehensive Feedback**: Get a detailed report with scores (0-100) for Technical, Communication, and Problem Solving skills.
-- **Session History**: All interviews are saved to a PostgreSQL database for progress tracking.
-- **Privacy First**: API keys are handled server-side; sessions are private to your instance.
-
-## 🛠️ Tech Stack
-
-- **Frontend**: Next.js 14 (App Router), TypeScript, Tailwind CSS, Framer Motion, Zustand
-- **Backend API**: Next.js API Routes (Serverless)
-- **AI/LLM**: Groq API (`llama-3.3-70b-versatile`) — free tier available
-- **Database**: PostgreSQL (via Docker), Prisma ORM
-- **Media**: Web Speech API (Recognition & Synthesis)
-
-## 🚀 Getting Started
+## Installation (Local Setup)
 
 ### Prerequisites
-
 - Node.js 18+
-- Docker & Docker Compose (for the database)
-- A Groq API Key (Get your free key at [console.groq.com](https://console.groq.com))
+- Docker & Docker Compose
+- Groq API Key (Get one for free at [console.groq.com](https://console.groq.com))
 
-### Installation
+### Steps
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/skillsphere.git
-   cd skillsphere
+   git clone https://github.com/yourusername/ai-interview-simulator.git
+   cd ai-interview-simulator
    ```
 
-2. **Install dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Configure Environment**
-   Copy the example file and add your API key:
+2. **Configure Environment**
    ```bash
    cp .env.example .env.local
    ```
-   Edit `.env.local` and set `GROQ_API_KEY`.
+   Edit `.env.local` and add your `GROQ_API_KEY`.
 
-4. **Start the Database**
+3. **Start Database**
    ```bash
-   npm run db:up
+   docker compose up -d
    ```
-   *This starts PostgreSQL and Adminer (database UI).*
 
-5. **Run Migrations**
-   Initialize the database schema:
+4. **Run Migrations**
    ```bash
    npm run db:migrate
    ```
 
-6. **Start the Application**
+5. **Install Dependencies**
+   ```bash
+   npm install
+   ```
+
+6. **Start Application**
    ```bash
    npm run dev
    ```
-   Visit [http://localhost:3000](http://localhost:3000)
 
-## 🔧 Developer Workflow
+   Open http://localhost:3000 to start your interview!
 
-We have provided several scripts to streamline development:
+## How It Works
 
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Start development server |
-| `npm run build` | Build for production |
-| `npm run lint` | Run ESLint |
-| `npm run db:up` | Start Docker containers (Postgres + Adminer) |
-| `npm run db:down` | Stop Docker containers |
-| `npm run db:migrate` | Apply Prisma migrations |
-| `npm run db:studio` | Open Prisma Studio (DB GUI) |
+1. **Initialization**: You select a role (e.g., DevOps) and level (e.g., Senior).
+2. **Interview Loop**:
+   - The AI generates a context-aware question.
+   - You answer via voice or text.
+   - The AI evaluates your answer internally (scoring 0-100) and generates a follow-up.
+3. **Conclusion**:
+   - The session ends when you click "End Interview".
+   - The AI generates a structured JSON report with strengths, weaknesses, and final scores.
+   - Data is saved to PostgreSQL for review.
 
-## 📐 Database Schema
+## API Routes
 
-The core models are:
+- `POST /api/interview/next-turn`: Handles the core conversation loop. Receives message history, calls Groq, and returns the recruiter's response + internal evaluation.
+- `POST /api/sessions/[id]/end`: Finalizes the session, requesting a comprehensive report from Groq and storing it in the DB.
+- `GET /api/sessions/[id]`: Retrieves session data, transcript, and report for the frontend review page.
 
-- **InterviewSession**: Stores config (role, level) and final scores.
-- **InterviewMessage**: Individual turns of the conversation (User/Recruiter).
-- **InterviewFinalReport**: Detailed feedback JSON generated by the LLM.
+## Troubleshooting
 
-## 🤝 Contributing
+- **Groq 401 / 429 Errors**: Check your API key. Free tier keys have rate limits. The app handles 429s with backoff, but you may need to wait.
+- **Microphone Issues**: Ensure you've granted browser permissions. Works best in Chrome/Edge.
+- **Database Connection**: Ensure Docker container is running (`docker ps`) and port 5432 is available.
+- **Build Errors**: Run `npm install` to ensure all type definitions are up to date.
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and development process.
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 🐛 Troubleshooting
-
-- **429 Rate Limited**: The Groq free tier has rate limits. Wait a moment and try again.
-- **Speech Recognition Not Working**: Use Chrome or Edge. Ensure microphone permissions are granted.
-- **Database Connection Error**: Ensure Docker is running (`docker ps`) and you ran `npm run db:up`.
-- **Microphone Echo**: Use headphones for the best experience.
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
+## License
+MIT
