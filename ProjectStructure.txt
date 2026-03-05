@@ -1,0 +1,1123 @@
+================================================================================
+                    PROJECT STRUCTURE ANALYSIS
+                    "Skill-Sphere" – AI Interview Simulator
+                    (Next.js 14 App Router → Spring Boot Migration Guide)
+================================================================================
+
+Generated: 2026-02-22
+Framework: Next.js 14 (App Router), React 18, TypeScript
+Database: PostgreSQL 16 (via Prisma ORM)
+LLM Provider: Groq (OpenAI-compatible REST API)
+State Management: Zustand 4.5 (client-side)
+Styling: TailwindCSS 3.4 + Framer Motion
+
+
+================================================================================
+1. FOLDER STRUCTURE & PURPOSE
+================================================================================
+
+/
+├── app/                        → Next.js App Router (pages + API routes)
+│   ├── api/                    → Server-side API route handlers
+│   │   ├── interview/
+│   │   │   ├── generate/       → POST: Generate interview question (alt endpoint)
+│   │   │   ├── next-turn/      → POST: Main interview turn handler (init + Q&A)
+│   │   │   └── summary/        → POST: Generate final interview summary
+│   │   ├── llm/
+│   │   │   └── ping/           → GET: Test LLM API connectivity
+│   │   ├── sessions/
+│   │   │   ├── create/         → POST: Create new interview session in DB
+│   │   │   ├── list/           → GET: List all sessions
+│   │   │   └── [id]/           → GET: Get single session by ID
+│   │   │       ├── message/    → POST: Save a message to a session
+│   │   │       └── end/        → POST: End session + generate final AI report
+│   │   ├── status/             → GET: Health check / LLM connectivity status
+│   │   └── test-llm/           → (empty, unused test directory)
+│   ├── auth/
+│   │   ├── login/              → Login page
+│   │   └── register/           → Registration page
+│   ├── dashboard/              → Dashboard page (stats, recent sessions)
+│   ├── interview/              → Live interview simulation page (main feature)
+│   ├── onboarding/             → Interview config/setup page
+│   ├── session/
+│   │   └── [id]/               → Session detail/review page (post-interview)
+│   ├── settings/               → User settings page (devices, TTS, API status)
+│   ├── layout.tsx              → Root layout (Inter font, ToastProvider)
+│   ├── page.tsx                → Landing page (homepage)
+│   └── globals.css             → Global styles (Tailwind base + custom)
+│
+├── components/                 → Reusable React components
+│   ├── ui/                     → Generic UI primitives
+│   │   ├── Button.tsx          → Button component (variants: primary, ghost, etc.)
+│   │   ├── Card.tsx            → Card + CardContent (glass variant)
+│   │   ├── Input.tsx           → Input with label, error, forwardRef
+│   │   ├── Modal.tsx           → Modal dialog with overlay
+│   │   ├── Select.tsx          → Select dropdown
+│   │   ├── Skeleton.tsx        → Loading skeleton (CardSkeleton)
+│   │   └── Toast.tsx           → Toast notification system (context-based)
+│   ├── layout/
+│   │   └── MainLayout.tsx      → App shell (navbar, theme toggle, user menu)
+│   ├── FilmTranscript.tsx      → Cinematic transcript view (monospace, timestamps)
+│   ├── PreparationOverlay.tsx  → Interview prep screen (AI preload + demo fallback)
+│   ├── RecruiterAvatar.tsx     → Animated AI recruiter orb (idle/listen/think/speak)
+│   ├── SubtitlesOverlay.tsx    → Floating subtitle overlay on video
+│   ├── TranscriptLive.tsx      → Live interim transcript + streaming message
+│   └── TranscriptModal.tsx     → Full transcript modal dialog
+│
+├── lib/                        → Utility/service modules
+│   ├── db.ts                   → Prisma client singleton
+│   ├── llmClient.ts            → Groq REST API client (retry, fallback, error types)
+│   ├── media.ts                → Camera/mic helpers (getUserMedia, MediaRecorder, etc.)
+│   ├── mock-api.ts             → API data mappers + dashboard stats calculator
+│   ├── persistence.ts          → Client-side session persistence (queue + flush)
+│   ├── prompts.ts              → System prompt builders for recruiter AI
+│   ├── speech.ts               → Speech recognition adapter (Web Speech API + fallback)
+│   ├── tts.ts                  → Text-to-speech manager (Web Speech Synthesis)
+│   ├── ttsQueue.ts             → Streaming TTS queue (sentence splitting + sequential play)
+│   ├── types.ts                → All TypeScript type definitions
+│   └── websocket.ts            → WebSocket client wrapper (unused in current flow)
+│
+├── store/                      → Zustand state management stores
+│   ├── auth.ts                 → Auth store (fake login/register, persisted)
+│   ├── interview.ts            → Interview session store (main runtime state)
+│   ├── llm.ts                  → LLM settings store (provider, model, temp, persisted)
+│   ├── preferences.ts          → User preferences store (language, TTS, devices, persisted)
+│   └── ttsStore.ts             → TTS preferences & runtime state (persisted partial)
+│
+├── prisma/
+│   ├── schema.prisma           → Database schema (4 models)
+│   └── prisma.config.ts        → Prisma config
+│
+├── docker-compose.yml          → PostgreSQL 16 + Adminer containers
+├── package.json                → Dependencies & scripts
+├── next.config.mjs             → Next.js configuration
+├── tailwind.config.ts          → Tailwind configuration
+├── tsconfig.json               → TypeScript configuration
+├── .env.example                → Environment variables template
+└── README.md                   → Project documentation
+
+
+================================================================================
+2. PAGES (Routes & Functionality)
+================================================================================
+
+Route: /
+  File: app/page.tsx
+  Type: Client Component ("use client")
+  Purpose: Marketing landing page
+  Features:
+    - Hero section with CTA buttons linking to /auth/register
+    - Features grid (Live Interview, Feedback, Role-Specific Practice)
+    - Testimonials section (static data, 3 testimonials)
+    - Call-to-action section
+    - Footer
+  State: None
+  Auth: Not required
+
+Route: /auth/login
+  File: app/auth/login/page.tsx
+  Type: Client Component
+  Purpose: User login
+  Features:
+    - Email/password form with Zod validation (react-hook-form)
+    - Calls useAuthStore().login() (fake auth, no API call)
+    - Redirects to /dashboard on success
+    - Toast notifications on success/failure
+  Validation:
+    - email: valid email format
+    - password: min 6 characters
+
+Route: /auth/register
+  File: app/auth/register/page.tsx
+  Type: Client Component
+  Purpose: User registration
+  Features:
+    - Name/email/password/confirmPassword form with Zod validation
+    - Calls useAuthStore().register() (fake auth)
+    - Redirects to /onboarding on success
+  Validation:
+    - name: min 2 characters
+    - email: valid email
+    - password: min 6 characters
+    - confirmPassword: must match password
+
+Route: /onboarding
+  File: app/onboarding/page.tsx
+  Type: Client Component
+  Purpose: Interview configuration/setup
+  Features:
+    - Step-by-step wizard (role, level, type, language, duration)
+    - Role options: DevOps, Cloud, Backend, Cybersecurity, Data
+    - Level options: junior, mid, senior
+    - Interview type options: HR, Tech, Mixed
+    - Language options: FR, EN
+    - Duration options: 5, 10, 15, 20, 30 minutes
+    - Stores config in interviewStore and preferencesStore
+    - Navigates to /interview on start
+  State: Uses useInterviewStore, usePreferencesStore
+
+Route: /dashboard
+  File: app/dashboard/page.tsx
+  Type: Client Component
+  Purpose: User dashboard with stats overview
+  Features:
+    - Wrapped in MainLayout
+    - Calls fetchDashboardStats() from lib/mock-api.ts
+    - Shows: total sessions, average score, streak, top weakness
+    - Recent sessions list with links to /session/[id]
+    - "New Interview" button linking to /onboarding
+    - Skeleton loading states
+  State: Local useState for stats
+  Data: Fetched from /api/sessions/list via mock-api.ts
+
+Route: /interview
+  File: app/interview/page.tsx
+  Type: Client Component (1061 lines, main feature)
+  Purpose: Live AI interview simulation
+  Features:
+    - Camera/microphone access (video preview)
+    - Web Speech Recognition for real-time transcription
+    - AI recruiter interaction via /api/interview/next-turn
+    - Text-to-Speech for recruiter voice (via TTSQueue)
+    - PreparationOverlay (shown first, preloads AI response)
+    - Recruiter avatar with animated states (idle/listening/thinking/speaking)
+    - Film-style transcript sidebar
+    - Subtitles overlay on video
+    - Timer/elapsed time display
+    - Manual text input fallback (if speech not supported)
+    - Session persistence (messages saved to DB via persistence.ts)
+    - Interview end → calls /api/sessions/[id]/end → redirects to /session/[id]
+    - Utterance buffering with silence detection (2s idle → send)
+    - Request throttling (3s block between API calls)
+    - Demo mode fallback (if AI API fails)
+  State: Uses useInterviewStore, usePreferencesStore, useTTSStore
+  Key Functions:
+    - handleStart(): initializes media, speech recognition, session, first AI turn
+    - handleEnd(): ends interview, flushes messages, calls end API, navigates
+    - handleManualSubmit(): text input submission
+    - toggleVideo()/toggleAudio(): media controls
+    - initMedia(): camera/mic setup with device selection
+
+Route: /session/[id]
+  File: app/session/[id]/page.tsx (inferred from directory structure)
+  Purpose: Post-interview session review/detail page
+  Features: Displays session results, transcript, scores, feedback
+
+Route: /settings
+  File: app/settings/page.tsx
+  Type: Client Component (475 lines)
+  Purpose: User settings configuration
+  Features:
+    - Wrapped in MainLayout
+    - Audio input device selection
+    - Video input device selection
+    - Language selection (EN/FR)
+    - TTS configuration (enable/disable, voice selection, rate, pitch, volume)
+    - Test voice button
+    - API status check (calls /api/status)
+    - Save preferences to Zustand stores
+  State: Uses usePreferencesStore, useTTSStore
+
+
+================================================================================
+3. API ROUTES (Backend Endpoints)
+================================================================================
+
+---------- INTERVIEW ROUTES ----------
+
+3.1  POST /api/interview/generate
+  File: app/api/interview/generate/route.ts
+  Purpose: Generate an interview question (alternative simpler endpoint)
+  Input (JSON body):
+    {
+      systemPrompt: string,    // Required. Full system prompt
+      messages: Array<{role: 'user'|'assistant', content: string}>,  // Required
+      config?: { temperature?: number, maxTokens?: number }
+    }
+  Output (JSON):
+    Success: { ok: true, data: RecruiterResponse }
+    Error:   { ok: false, error: { code, message, hint } }
+  LLM Client Function: nextTurn()
+  Error Codes: INVALID_REQUEST, LLM error codes, UNKNOWN_ERROR
+
+3.2  POST /api/interview/next-turn
+  File: app/api/interview/next-turn/route.ts
+  Purpose: Main interview turn handler (initializes + processes Q&A turns)
+  Input (JSON body, validated with Zod):
+    {
+      sessionId: string,                         // Required
+      isInit: boolean,                            // Required  
+      interviewParams?: {                         // Required if isInit=true
+        role: string,
+        level: string,
+        interviewType: string,
+        language: string,
+        duration?: number
+      },
+      candidateText?: string,                     // Required if isInit=false
+      messages: Array<{role: 'user'|'assistant', content: string}>
+    }
+  Output (JSON):
+    Success: {
+      ok: true,
+      data: {
+        say: string,
+        type: "question"|"followup"|"closing",
+        rubric: "hr"|"tech"|"closing",
+        evaluation?: {
+          total_score: number,
+          technical_score: number,
+          communication_score: number,
+          problem_solving_score: number,
+          experience_score: number,
+          signals?: string[]
+        }
+      },
+      meta: { requestId, latency, llmLatency }
+    }
+    Error: { ok: false, error: { code, message, hint, requestId }, meta? }
+  Special Behavior:
+    - Maintains in-memory session cache (Map<sessionId, sessionData>)
+    - On init: builds system prompt from interviewParams, sends to LLM
+    - On turn: appends candidateText to history, sends full context to LLM
+    - Validates LLM response with Zod schema
+    - Returns 200 with ok:false for expected LLM errors (not 500)
+    - Exports cleanupSessions() (unused)
+  LLM Client Function: nextTurn()
+  Error Codes: INVALID_JSON, VALIDATION_ERROR, MISSING_PARAMS, MISSING_TEXT,
+               INVALID_MODEL_JSON, LLM codes, INTERNAL_ERROR
+
+3.3  POST /api/interview/summary
+  File: app/api/interview/summary/route.ts
+  Purpose: Generate final interview evaluation summary
+  Input (JSON body):
+    {
+      summaryPrompt: string    // Required. Full summary prompt text
+    }
+  Output (JSON):
+    Success: { ok: true, data: InterviewSummary }
+    Error:   { ok: false, error: { code, message, hint } }
+  LLM Client Function: generateSummary()
+
+---------- LLM ROUTES ----------
+
+3.4  GET /api/llm/ping
+  File: app/api/llm/ping/route.ts
+  Purpose: Test LLM API connectivity and measure latency
+  Input: None
+  Output (JSON):
+    Success: { ok: true, provider: "Groq", model: string, latency: number }
+    Error:   { ok: false, error: { code, message, hint }, latency: number }
+  LLM Client Function: ping()
+
+---------- SESSION ROUTES ----------
+
+3.5  POST /api/sessions/create
+  File: app/api/sessions/create/route.ts
+  Purpose: Create a new interview session record in PostgreSQL
+  Input (JSON body):
+    {
+      role: string,            // Required
+      level: string,           // Required
+      interviewType: string,   // Required
+      language: string,        // Required
+      durationMinutes?: number,
+      duration?: number        // fallback for durationMinutes
+    }
+  Output (JSON):
+    Success: { ok: true, sessionId: string }
+    Error:   { ok: false, error: { code, message, requestId } }
+  Database: prisma.interviewSession.create()
+  Error Codes: VALIDATION_ERROR, DB_UNAVAILABLE (P1001/P1002), SERVER_ERROR
+
+3.6  GET /api/sessions/list
+  File: app/api/sessions/list/route.ts
+  Purpose: List all interview sessions (sorted by createdAt desc)
+  Input: None
+  Output (JSON):
+    Success: {
+      ok: true,
+      sessions: Array<{
+        id, createdAt, endedAt, role, level, interviewType,
+        status, recruiterImpression, overallScore
+      }>
+    }
+    Error: { ok: false, error: { code, message, requestId } }
+  Database: prisma.interviewSession.findMany()
+
+3.7  GET /api/sessions/[id]
+  File: app/api/sessions/[id]/route.ts
+  Purpose: Get a single session with messages and final report
+  Input: URL parameter: id (session UUID)
+  Output (JSON):
+    Success: {
+      ok: true,
+      session: {
+        ...InterviewSession,
+        messages: Array<InterviewMessage> (timestampMs converted to Number),
+        finalReport?: InterviewFinalReport
+      }
+    }
+    Error: { ok: false, error: { code: 'NOT_FOUND'|'DB_UNAVAILABLE'|'SERVER_ERROR' } }
+  Database: prisma.interviewSession.findUnique() with include: { messages, finalReport }
+
+3.8  POST /api/sessions/[id]/message
+  File: app/api/sessions/[id]/message/route.ts
+  Purpose: Save a single interview message to the database
+  Input (JSON body):
+    {
+      role: string,            // Required ('recruiter' | 'candidate')
+      text: string,            // Required
+      timestampMs: number,     // Required (BigInt in DB)
+      elapsedSec?: number,     // Defaults to 0
+      recruiterMsgId?: string
+    }
+  Output (JSON):
+    Success: { ok: true }
+    Error: { ok: false, error: { code, message, requestId } }
+  Database: prisma.interviewMessage.create()
+  Special Behavior:
+    - Returns ok:true even if DB is unavailable (graceful degradation)
+    - Does NOT block the UI if persistence fails
+
+3.9  POST /api/sessions/[id]/end
+  File: app/api/sessions/[id]/end/route.ts
+  Purpose: End interview session, generate AI final report, save to DB
+  Input (JSON body):
+    {
+      messages: Array<{type: 'recruiter'|'user', text: string}>
+    }
+  Processing:
+    1. Fetch session config from DB (role, level, etc.)
+    2. Build conversation context from messages
+    3. Build final evaluation prompt
+    4. Call LLM for final evaluation (generateFinalReport())
+    5. Update session status to 'ended', save scores
+    6. Upsert InterviewFinalReport with impression, metrics, weaknesses
+  Output (JSON):
+    Success: {
+      ok: true,
+      finalReport: {
+        recruiter_impression: 'Hire'|'Lean Hire'|'No Hire',
+        metrics: {
+          total_score: 0-100,
+          technical_score: 0-100,
+          communication_score: 0-100,
+          problem_solving_score: 0-100
+        },
+        weaknesses: string[]
+      }
+    }
+    Error: { ok: false, error: { code, message, requestId } }
+  LLM Client Function: generateFinalReport()
+
+---------- STATUS ROUTE ----------
+
+3.10  GET /api/status
+  File: app/api/status/route.ts
+  Purpose: Health check endpoint (tests LLM connectivity)
+  Input: None
+  Output (JSON):
+    Success: { ok: true, provider: string, model: string }
+    Error:   { ok: false, error: { code, message, hint } }
+  LLM Client Function: ping()
+
+
+================================================================================
+4. REACT COMPONENTS (Props & Behavior)
+================================================================================
+
+---------- UI PRIMITIVES (components/ui/) ----------
+
+4.1  Button
+  File: components/ui/Button.tsx
+  Props:
+    variant?: 'primary' | 'secondary' | 'ghost' | 'outline' | 'danger'
+    size?: 'sm' | 'md' | 'lg'
+    isLoading?: boolean
+    className?: string
+    children: ReactNode
+    + all native button HTML attributes
+  Behavior: Renders styled button, shows spinner when isLoading
+
+4.2  Card, CardContent
+  File: components/ui/Card.tsx  
+  Card Props:
+    variant?: 'default' | 'glass'
+    hover?: boolean
+    className?: string
+    children: ReactNode
+  CardContent Props:
+    className?: string
+    children: ReactNode
+  Behavior: Glass morphism card wrapper
+
+4.3  Input
+  File: components/ui/Input.tsx
+  Props:
+    label?: string
+    error?: string
+    className?: string
+    + all native input HTML attributes (via forwardRef)
+  Behavior: Input with optional label and error message display
+
+4.4  Modal
+  File: components/ui/Modal.tsx
+  Props: (standard modal props: isOpen, onClose, title, children)
+  Behavior: Overlay modal with AnimatePresence animations
+
+4.5  Select
+  File: components/ui/Select.tsx
+  Props:
+    label?: string
+    options: Array<{value: string, label: string}>
+    error?: string
+    + native select attributes
+  Behavior: Styled select dropdown
+
+4.6  Skeleton (CardSkeleton)
+  File: components/ui/Skeleton.tsx
+  Purpose: Loading placeholder components
+
+4.7  Toast (ToastProvider, useToast)
+  File: components/ui/Toast.tsx
+  Provider: Wraps app in context, manages toast stack
+  Hook: useToast() → { showToast(type: 'success'|'error'|'info', message) }
+  Behavior: Animated toast notifications, auto-dismiss
+
+---------- LAYOUT COMPONENT ----------
+
+4.8  MainLayout
+  File: components/layout/MainLayout.tsx
+  Props: { children: ReactNode }
+  Behavior:
+    - App shell with sticky navbar
+    - Logo, navigation links (Dashboard, Settings)
+    - Theme toggle (dark/light mode via localStorage)
+    - User info display + logout button
+    - Reads from useAuthStore (user, logout)
+
+---------- INTERVIEW COMPONENTS ----------
+
+4.9  RecruiterAvatar
+  File: components/RecruiterAvatar.tsx
+  Props:
+    state: 'idle' | 'listening' | 'thinking' | 'speaking'
+    className?: string
+  Behavior:
+    - Animated orb with pulsing rings (Framer Motion)
+    - State-dependent colors (gray/blue/amber/green)
+    - Speaking waveform bars, thinking dots
+    - Icons: User/Mic/Brain/MessageSquare per state
+
+4.10  PreparationOverlay
+  File: components/PreparationOverlay.tsx
+  Props: { onReady: () => void }
+  Behavior:
+    - Shown before interview starts
+    - Creates session via persistence.createSession()
+    - Pre-loads first AI response by calling /api/interview/next-turn
+    - Progress indicator with animated steps
+    - Falls back to demo mode if API fails (hardcoded demo responses)
+    - Calls onReady() when AI response + session are ready
+  State: Uses useInterviewStore (config, demoMode, preloadedResponse)
+
+4.11  FilmTranscript
+  File: components/FilmTranscript.tsx
+  Props:
+    messages: Message[]   (id, type, text, timestamp)
+    interimText?: string
+    currentlySpeakingId?: string | null
+    elapsedTime: number
+  Behavior:
+    - Monospace/cinematic transcript display
+    - Timestamps formatted as MM:SS
+    - Color-coded speakers (blue=recruiter, green=candidate)
+    - Speaking highlight with pulse animation
+    - Interim text display while listening
+    - Auto-scroll to bottom
+
+4.12  SubtitlesOverlay
+  File: components/SubtitlesOverlay.tsx
+  Props:
+    messages: ConversationMessage[]
+    interimText: string
+    currentlySpeakingId: string | null
+    recruiterText?: string
+    recruiterSpeaking?: boolean
+  Behavior:
+    - Floating subtitle bar at bottom of screen
+    - Chunks messages into ~60-char lines
+    - Priority display: recruiter live > user interim > queued subtitles
+    - Sequential queue consumer with duration-based timing
+    - AnimatePresence for fade animations
+    - Glassmorphism styling
+
+4.13  TranscriptLive + StreamingMessage
+  File: components/TranscriptLive.tsx
+  TranscriptLive Props:
+    interimText: string
+    className?: string
+  StreamingMessage Props:
+    text: string
+    className?: string
+  Behavior:
+    - TranscriptLive: shows real-time speech-to-text in a bubble
+    - StreamingMessage: shows AI response being typed with cursor blink
+
+4.14  TranscriptModal
+  File: components/TranscriptModal.tsx
+  Props:
+    isOpen: boolean
+    onClose: () => void
+    messages: ConversationMessage[]
+  Behavior:
+    - Full-screen modal showing complete interview transcript
+    - Chat-style layout (recruiter left, user right)
+    - Scrollable content area
+
+
+================================================================================
+5. STATE MANAGEMENT (Zustand Stores)
+================================================================================
+
+5.1  useAuthStore (store/auth.ts)
+  Persistence: localStorage key "auth-storage"
+  State:
+    user: User | null              // { id, email, name, createdAt }
+    isAuthenticated: boolean
+  Actions:
+    login(email, password)         → Fake auth (500ms delay), sets user
+    register(email, password, name) → Fake auth, sets user
+    logout()                       → Clears user
+  MIGRATION NOTE: This is entirely fake. In Spring Boot, replace with real
+  JWT/session authentication. The User model has { id, email, name, createdAt }.
+
+5.2  useInterviewStore (store/interview.ts)
+  Persistence: NONE (runtime only, resets on page reload)
+  State:
+    sessionId: string | null
+    config: SessionConfig | null                    // { role, level, interviewType, language, duration }
+    status: 'idle'|'connecting'|'interviewing'|'paused'|'ended'
+    recruiterState: 'idle'|'listening'|'thinking'|'speaking'
+    connectionStatus: 'disconnected'|'connecting'|'connected'|'reconnecting'
+    recordingState: 'inactive'|'recording'|'paused'
+    messages: ConversationMessage[]                 // { id, type, text, timestamp }
+    partialTranscript: string
+    liveInterim: string
+    elapsedTime: number (seconds)
+    audioLevel: number (0-100)
+    privateNotes: PrivateNote[]                     // { timestamp, signals[], score_hint }
+    isListening: boolean
+    streamingText: string
+    hasInitialized: boolean
+    lastSentTranscript: string
+    lastSentTimestamp: number
+    isRecruiterSpeaking: boolean
+    utteranceBuffer: string
+    silenceTimerId: NodeJS.Timeout | null
+    requestInFlight: boolean
+    blockedUntil: number (timestamp)
+    lastSentNormalized: string
+    requestCounter: number
+    preloadedResponse: { say: string, evaluation?: any } | null
+    demoMode: boolean
+  Actions: set* for each field, addMessage, appendStreamingText, reset(), etc.
+
+5.3  useLLMStore (store/llm.ts)
+  Persistence: localStorage key "llm-settings"
+  State:
+    provider: 'groq'
+    baseUrl: 'https://api.groq.com/openai/v1'
+    model: 'llama-3.3-70b-versatile'
+    temperature: 0.4
+    maxTokens: 1000
+    useMockMode: boolean
+  Actions: setProvider, setBaseUrl, setModel, setTemperature, setMaxTokens,
+           setUseMockMode, getConfig()
+  MIGRATION NOTE: These are client-side settings. In Spring Boot, move to
+  application.yml or admin configuration.
+
+5.4  usePreferencesStore (store/preferences.ts)
+  Persistence: localStorage key "preferences-storage"
+  State:
+    language: 'EN' | 'FR'
+    ttsEnabled: boolean (default true)
+    autoSubtitles: boolean (default true)
+    showGazeTips: boolean (default true)
+    selectedAudioInput?: string (device ID)
+    selectedVideoInput?: string (device ID)
+  Actions: set* for each field
+
+5.5  useTTSStore (store/ttsStore.ts)
+  Persistence: localStorage key "tts-storage" (partial: only prefs, not runtime)
+  State (persisted):
+    enabled: boolean (default true)
+    voiceURI: string | null
+    rate: number (0.5-2.0, default 1.0)
+    pitch: number (0.5-2.0, default 1.0)
+    volume: number (0-1, default 1.0)
+  State (runtime):
+    isSpeaking: boolean
+    lastSpokenMessageId: string | null
+
+STATE FLOW:
+  1. User configures interview on /onboarding → writes to interviewStore.config + preferencesStore
+  2. User navigates to /interview → PreparationOverlay creates session, preloads AI
+  3. Interview loop:
+     a. Speech recognition → interviewStore (liveInterim, utteranceBuffer)
+     b. Silence detection → API call → response → interviewStore (messages, streamingText)
+     c. TTS speaks response → ttsStore (isSpeaking)
+  4. Interview ends → API call → navigate to /session/[id]
+
+
+================================================================================
+6. SERVICES / UTILITIES (lib/)
+================================================================================
+
+6.1  lib/db.ts
+  - Exports singleton PrismaClient instance
+  - Hot-reload safe (global cache in development)
+  - Logs: errors + warnings in dev, errors only in prod
+
+6.2  lib/llmClient.ts (SERVER-SIDE ONLY)
+  Purpose: Centralized Groq REST API client
+  Environment Variables:
+    GROQ_API_KEY (required)
+    GROQ_MODEL (default: 'llama-3.3-70b-versatile')
+  Config:
+    FALLBACK_MODEL: 'llama-3.1-8b-instant'
+    MIN_REQUEST_GAP_MS: 500ms (rate limiter)
+    MAX_RETRIES: 3
+    INITIAL_RETRY_DELAY_MS: 3000ms
+  Exported Functions:
+    ping() → Tests API with minimal request
+    nextTurn(options) → Generates next recruiter response
+    generateSummary(options) → Generates interview summary
+    generateFinalReport(options) → Generates final evaluation
+  Internal Functions:
+    makeGroqRequestOnce() → Raw HTTPS request to api.groq.com
+    makeGroqRequest() → With retry, backoff, fallback model
+    extractJSON() → Strips markdown code blocks from response
+  Error Handling:
+    Custom LLMClientError class with codes:
+      API_KEY_MISSING, INVALID_ARGUMENT, PERMISSION_DENIED, NOT_FOUND,
+      RESOURCE_EXHAUSTED, NETWORK_ERROR, JSON_PARSE_FAILED,
+      INVALID_MODEL_JSON, MODEL_DEPRECATED, UNKNOWN_ERROR
+  MIGRATION NOTE: In Spring Boot, this becomes a @Service with WebClient or
+  RestTemplate. Keep the retry/fallback logic. Use @Value for config.
+
+6.3  lib/prompts.ts
+  Purpose: Builds LLM system prompts for different interview stages
+  Functions:
+    buildInterviewSystemPrompt(config) → Full recruiter persona prompt with:
+      - Role context, level, type, language
+      - Interview rules (one question at a time, follow-ups, difficulty curve)
+      - Mandatory scoring rules (0-100 for each category)
+      - Strict JSON output format for each turn
+    buildSummaryPrompt(transcript, privateNotes, config) → Post-interview summary prompt
+    buildFinalEvaluationPrompt(config) → End-of-interview evaluation prompt
+  MIGRATION NOTE: Move to a PromptService. Templates can be externalized.
+
+6.4  lib/persistence.ts (CLIENT-SIDE)
+  Purpose: Client-side session persistence manager
+  Class: SessionPersistence (singleton exported as `persistence`)
+  Features:
+    - Message queue with auto-flush every 2 seconds
+    - Batch flush when queue reaches 5 messages
+    - createSession(config) → POST /api/sessions/create
+    - queueMessage(msg) → buffers, flushes to POST /api/sessions/[id]/message
+    - endSession(messages, config) → POST /api/sessions/[id]/end
+  MIGRATION NOTE: In Spring Boot SPA, this would use fetch to the Spring endpoints.
+
+6.5  lib/media.ts (CLIENT-SIDE)
+  Purpose: Browser media stream utilities
+  Functions:
+    getMediaStream(constraints) → getUserMedia wrapper
+    stopMediaStream(stream) → stops all tracks
+    enumerateDevices() → lists media devices
+    getAudioInputDevices() / getVideoInputDevices() → filtered lists
+    createMediaRecorder(stream, options) → MediaRecorder factory
+    startRecording/stopRecording/pauseRecording/resumeRecording
+    blobToBase64(blob) / base64ToBlob(base64, mimeType)
+    createAudioLevelDetector(stream, onLevel) → real-time audio level meter
+
+6.6  lib/speech.ts (CLIENT-SIDE)
+  Purpose: Speech recognition abstraction
+  Interface: SpeechRecognitionAdapter
+    Methods: start, stop, pause, resume, onInterim, onFinal, onError, setLanguage
+  Implementations:
+    WebSpeechRecognition → Uses Web Speech API (continuous, interimResults)
+    TextInputRecognition → Fallback for unsupported browsers
+  Factory: createSpeechRecognition(preferWebSpeech) → returns best adapter
+
+6.7  lib/tts.ts (CLIENT-SIDE)
+  Purpose: Text-to-speech manager using Web Speech Synthesis API
+  Class: TTSManager (singleton via getTTS())
+  Features:
+    - Voice enumeration by language (en-*, fr-*)
+    - Best voice selection (prefers local service voices)
+    - speak(text, options) with callbacks (onStart, onEnd, onError)
+    - cancel/pause/resume/isSpeaking controls
+  Options: voiceURI, rate, pitch, volume, lang
+
+6.8  lib/ttsQueue.ts (CLIENT-SIDE)
+  Purpose: Sequential speech queue for streaming text
+  Class: TTSQueue
+  Features:
+    - Accumulates text chunks in buffer
+    - Detects sentence boundaries (. ? ! : \n)
+    - Queues sentences for sequential TTS playback
+    - flush() → speaks remaining buffer
+    - cancel() → clears queue and stops speech
+    - Callbacks: onStart, onEnd, onSpeakingStateChange
+    - setOptions(TTSOptions) for voice configuration
+
+6.9  lib/mock-api.ts (CLIENT-SIDE)
+  Purpose: API data mapping and dashboard stats
+  Functions:
+    mapSessionToData(dbSession) → SessionData
+      - Maps DB fields to frontend model
+      - Converts messages, scores, feedback, timeline
+    fetchSession(id) → GET /api/sessions/{id}
+    fetchSessions() → GET /api/sessions/list
+    fetchDashboardStats() → Computes: totalSessions, avgScore, streak, recentSessions
+
+6.10  lib/websocket.ts (CLIENT-SIDE)
+  Purpose: WebSocket client wrapper (auto-reconnect)
+  Class: WebSocketClient (singleton via getWebSocketClient())
+  Features:
+    - Connect with query params
+    - Auto-reconnect with exponential backoff (max 5 attempts)
+    - Message handlers (parse JSON → IncomingMessage)
+    - Send OutgoingMessage as JSON
+    - Connection/disconnection/error handlers
+  Config: NEXT_PUBLIC_WS_URL (default ws://localhost:8080/ws)
+  MIGRATION NOTE: This appears to be prepared for a future WebSocket-based
+  architecture but is NOT actively used in the current REST-based flow.
+  If migrating to Spring Boot, consider implementing WebSocket for real-time
+  interview communication using Spring WebSocket / STOMP.
+
+6.11  lib/types.ts
+  All TypeScript type definitions — see Section 7 for details.
+
+
+================================================================================
+7. DATA MODELS
+================================================================================
+
+---------- DATABASE MODELS (Prisma Schema) ----------
+
+7.1  InterviewSession (table: interview_sessions)
+  Fields:
+    id:                   String    @id @default(uuid())
+    createdAt:            DateTime  @default(now())
+    endedAt:              DateTime? (nullable)
+    role:                 String    (e.g., "DevOps", "Cloud", "Backend", "Cybersecurity", "Data")
+    level:                String    (e.g., "junior", "mid", "senior")
+    interviewType:        String    (e.g., "HR", "Tech", "Mixed")
+    language:             String    (e.g., "FR", "EN")
+    durationMinutes:      Int?      (nullable)
+    status:               String    @default("running")  // "running" | "ended"
+    recruiterImpression:  String?   (e.g., "Hire", "Lean Hire", "No Hire")
+    overallScore:         Int?      (0-100)
+    technicalScore:       Int?      (0-100)
+    communicationScore:   Int?      (0-100)
+    problemSolvingScore:  Int?      (0-100)
+    experienceScore:      Int?      (0-100)
+  Relations:
+    evaluations → InterviewEvaluation[] (one-to-many)
+    finalReport → InterviewFinalReport? (one-to-one)
+    messages    → InterviewMessage[]    (one-to-many)
+
+7.2  InterviewMessage (table: interview_messages)
+  Fields:
+    id:             String    @id @default(uuid())
+    sessionId:      String    (FK → InterviewSession)
+    role:           String    ("recruiter" | "candidate")
+    text:           String
+    timestampMs:    BigInt    (epoch milliseconds)
+    elapsedSec:     Int
+    recruiterMsgId: String?   (nullable, links to recruiter question ID)
+    createdAt:      DateTime  @default(now())
+  Index: sessionId
+  Cascade: onDelete from session
+
+7.3  InterviewEvaluation (table: interview_evaluations)
+  Fields:
+    id:                   String    @id @default(uuid())
+    sessionId:            String    (FK → InterviewSession)
+    turnIndex:            Int       (which turn this evaluation is for)
+    overallScore:         Int       (0-100)
+    technicalScore:       Int       (0-100)
+    communicationScore:   Int       (0-100)
+    problemSolvingScore:  Int       (0-100)
+    experienceScore:      Int       (0-100)
+    signals:              Json?     (e.g., ["too_generic", "good_structure"])
+    notesPrivate:         Json?     (private evaluation notes)
+    createdAt:            DateTime  @default(now())
+  Index: sessionId
+  Cascade: onDelete from session
+  NOTE: Currently not actively written to by the API (scores come in
+  response.evaluation but are stored in privateNotes on the client side).
+  Could be used for per-turn evaluation persistence.
+
+7.4  InterviewFinalReport (table: interview_final_reports)
+  Fields:
+    sessionId:            String    @id (FK → InterviewSession, one-to-one)
+    impression:           String    ("Hire" | "Lean Hire" | "No Hire")
+    overallScore:         Int       (0-100)
+    technicalScore:       Int       (0-100)
+    communicationScore:   Int       (0-100)
+    problemSolvingScore:  Int       (0-100)
+    experienceScore:      Int       (0-100, currently always 0)
+    whatIDidWell:          Json      (string array, currently empty [])
+    areasForImprovement:  Json      (string array from LLM weaknesses)
+    rawModelOutput:       String    (full JSON string from LLM)
+    createdAt:            DateTime  @default(now())
+  Cascade: onDelete from session
+
+---------- FRONTEND-ONLY TYPES (lib/types.ts) ----------
+
+7.5  Enums (union types):
+    Role:          "DevOps" | "Cloud" | "Backend" | "Cybersecurity" | "Data"
+    Level:         "junior" | "mid" | "senior"
+    InterviewType: "HR" | "Tech" | "Mixed"
+    Language:      "FR" | "EN"
+    LLMProvider:   "groq"
+
+7.6  ConversationMessage  { id, type: 'recruiter'|'user', text, timestamp }
+7.7  SessionConfig        { role, level, interviewType, language, duration }
+7.8  SessionData          { id, status, config, startTime, endTime?, transcript,
+                            scores?, feedback?, timeline? }
+7.9  TimelineEvent        { timestamp, label, description }
+7.10 UserPreferences      { language, ttsEnabled, autoSubtitles, showGazeTips,
+                            selectedAudioInput?, selectedVideoInput? }
+7.11 User                 { id, email, name, createdAt } (fake auth)
+
+---------- WebSocket Message Types (UNUSED in current flow) ----------
+
+  IncomingMessage: RecruiterQuestionMessage | RecruiterFollowupMessage |
+                   PartialTranscriptMessage | FinalTranscriptMessage |
+                   SessionEndSummaryMessage | ErrorMessage
+  OutgoingMessage: StartSessionMessage | AudioChunkMessage | UserEventMessage |
+                   RequestRepeatMessage | RequestClarifyMessage
+
+
+================================================================================
+8. EXTERNAL INTEGRATIONS
+================================================================================
+
+8.1  Groq API (LLM Provider)
+  Endpoint: https://api.groq.com/openai/v1/chat/completions
+  Protocol: HTTPS POST (OpenAI-compatible chat completions)
+  Auth: Bearer token (GROQ_API_KEY environment variable)
+  Models:
+    Primary: llama-3.3-70b-versatile (configurable via GROQ_MODEL env)
+    Fallback: llama-3.1-8b-instant
+  Used For:
+    - Interview question generation (nextTurn)
+    - Ping/health check
+    - Final interview evaluation (generateFinalReport)
+    - Interview summary (generateSummary)
+  Rate Limiting: 500ms minimum gap between requests, 3 retries with exponential backoff
+  MIGRATION NOTE: In Spring Boot, create a GroqService using WebClient.
+  The api.groq.com follows OpenAI API spec, so you can use the openai-java SDK
+  or raw HTTP client. Keep the retry/fallback/rate-limiting logic.
+
+8.2  PostgreSQL Database
+  Hosting: Docker container (PostgreSQL 16 Alpine)
+  Connection: DATABASE_URL env variable
+  ORM: Prisma (in Next.js)
+  Connection String Format: postgresql://user:password@localhost:5432/dbname?schema=public
+  MIGRATION NOTE: In Spring Boot, use Spring Data JPA with Hibernate.
+  Map Prisma models to @Entity classes. Use Flyway or Liquibase for migrations.
+
+8.3  Browser Web APIs (CLIENT-SIDE ONLY, not part of backend migration):
+  - Web Speech API (SpeechRecognition) → for live transcription
+  - Web Speech Synthesis API → for TTS (recruiter voice)
+  - MediaDevices API (getUserMedia) → camera/microphone access
+  - MediaRecorder API → audio recording (prepared but not actively used for streaming)
+  - AudioContext/AnalyserNode → audio level detection
+
+
+================================================================================
+9. ARCHITECTURE & DATA FLOW
+================================================================================
+
+OVERALL ARCHITECTURE:
+  Client (React SPA) ←→ Next.js API Routes ←→ PostgreSQL
+                                   ↕
+                             Groq LLM API
+
+DATA FLOW — INTERVIEW SESSION LIFECYCLE:
+
+  1. SETUP (/onboarding)
+     User selects: role, level, type, language, duration
+     → Stored in useInterviewStore.config (Zustand, client memory)
+     → Navigate to /interview
+
+  2. PREPARATION (PreparationOverlay)
+     a. POST /api/sessions/create { role, level, interviewType, language }
+        → Creates InterviewSession in PostgreSQL (status: "running")
+        → Returns sessionId → stored in useInterviewStore
+     b. POST /api/interview/next-turn { sessionId, isInit: true, interviewParams, messages:[] }
+        → Server builds system prompt from config
+        → Calls Groq API with system prompt + "Start the interview" user message
+        → Returns first recruiter question
+        → Stored in useInterviewStore.preloadedResponse
+     c. If API fails → fallback to demo mode (hardcoded responses)
+
+  3. INTERVIEW LOOP (/interview page)
+     a. PreloadedResponse displayed as first recruiter message
+     b. TTS speaks recruiter message (via TTSQueue → Web Speech Synthesis)
+     c. User speaks → Web Speech Recognition → interim text → final transcript
+     d. Utterance buffering (concatenate finals until 2s silence)
+     e. POST /api/interview/next-turn { sessionId, isInit:false, candidateText, messages }
+        → Server appends candidateText to conversation history
+        → Builds system prompt from cached session params
+        → Calls Groq API with full conversation context
+        → Validates response (Zod schema)
+        → Returns RecruiterResponse { say, type, rubric, evaluation? }
+     f. RecruiterResponse displayed → TTS speaks → recruiter avatar animates
+     g. Messages saved:
+        - POST /api/sessions/[id]/message (user message)
+        - POST /api/sessions/[id]/message (recruiter message)
+        (batched via persistence queue, flushes every 2s or 5 messages)
+     h. Repeat from (c) until user clicks "End Interview"
+
+  4. END INTERVIEW
+     a. FlushAll pending messages to DB
+     b. POST /api/sessions/[id]/end { messages: fullTranscript }
+        → Fetches session config from DB
+        → Builds final evaluation prompt
+        → Calls Groq API (generateFinalReport)
+        → Returns: impression, metrics (total/tech/comm/problem_solving), weaknesses
+        → Updates InterviewSession: status='ended', endedAt, scores
+        → Upserts InterviewFinalReport with all evaluation data
+        → Returns finalReport to client
+     c. Navigate to /session/[sessionId]
+
+  5. REVIEW (/session/[id])
+     a. GET /api/sessions/[id] → returns session + messages + finalReport
+     b. Displays: transcript, scores, feedback, impression, weaknesses
+
+  6. DASHBOARD (/dashboard)
+     a. GET /api/sessions/list → all sessions (summary fields)
+     b. Client computes: totalSessions, avgScore, streak, recentSessions
+
+
+SERVER-SIDE REQUEST FLOW (for /api/interview/next-turn):
+  Request → JSON parse → Zod validation → Session cache lookup/create
+  → Build system prompt → Call Groq API (with rate limiting, retry, fallback)
+  → Validate response schema → Update session cache → Return response
+
+
+================================================================================
+10. SPECIAL PATTERNS & MIGRATION NOTES
+================================================================================
+
+10.1  FAKE AUTHENTICATION
+  - Current auth is entirely client-side (Zustand + localStorage)
+  - No JWT, no sessions, no server-side auth
+  - Anyone can access all pages, all API routes are unauthenticated
+  MIGRATION: Implement Spring Security with JWT authentication.
+  Add User entity to DB. Protect API endpoints. Associate sessions with users.
+
+10.2  IN-MEMORY SESSION CACHE (next-turn route)
+  - The /api/interview/next-turn route maintains an in-memory Map<sessionId, data>
+  - This stores conversation history, interview params, and init status
+  - VOLATILE: lost on server restart, not shared across instances
+  MIGRATION: In Spring Boot, either:
+    a. Use Redis for session cache (recommended for scalability)
+    b. Use a stateful @Service with ConcurrentHashMap (single instance only)
+    c. Reconstruct state from DB on each request (highest reliability)
+
+10.3  DATABASE COMMUNICATION
+  - Prisma ORM (Node.js) → replace with Spring Data JPA + Hibernate
+  - UUID primary keys → use UUID type in PostgreSQL, @GeneratedValue(strategy=UUID)
+  - BigInt timestampMs → use Long in Java
+  - Json columns (signals, notesPrivate, whatIDidWell, areasForImprovement) →
+    Use @Type(JsonType.class) with Hibernate Types or String with JSON parsing
+  - Cascade deletes → JPA cascade types
+
+10.4  LLM CLIENT MIGRATION
+  - Current: Raw HTTPS requests using Node.js https module
+  - Spring Boot equivalent: Use WebClient (reactive) or RestTemplate
+  - Keep: Retry logic (3 retries, exponential backoff), model fallback,
+    rate limiting (500ms gap), custom error codes
+  - Create: GroqService @Service, GroqProperties @ConfigurationProperties
+  - The API follows OpenAI spec → can use openai-java SDK
+
+10.5  PROMPT ENGINEERING
+  - Prompts are hardcoded in lib/prompts.ts
+  - Three prompt types: interview system, summary, final evaluation
+  - All require JSON-only output from the LLM
+  MIGRATION: Create a PromptService or use template files (Thymeleaf/Mustache).
+  Externalize prompt templates for easier modification.
+
+10.6  CLIENT-SIDE BROWSER APIs (NOT IN SCOPE FOR SPRING BOOT BACKEND)
+  These remain in the frontend (React SPA):
+  - Web Speech Recognition (speech.ts)
+  - Web Speech Synthesis / TTS (tts.ts, ttsQueue.ts)
+  - MediaDevices / getUserMedia (media.ts)
+  - MediaRecorder (media.ts)
+  The Spring Boot backend only needs to expose REST APIs. The SPA handles these.
+
+10.7  GRACEFUL DEGRADATION
+  - /api/sessions/[id]/message returns ok:true even if DB is down
+  - PreparationOverlay falls back to demo mode if AI API fails
+  - LLM client uses fallback model if primary is deprecated/unavailable
+  MIGRATION: Maintain this pattern in Spring Boot with @ExceptionHandler
+  and @ControllerAdvice.
+
+10.8  ENVIRONMENT VARIABLES
+  Required for Spring Boot (application.yml):
+    groq.api-key       (from GROQ_API_KEY)
+    groq.model          (from GROQ_MODEL, default: llama-3.3-70b-versatile)
+    spring.datasource.url   (from DATABASE_URL)
+    spring.datasource.username
+    spring.datasource.password
+
+10.9  DOCKER
+  - Current docker-compose.yml provides PostgreSQL 16 + Adminer
+  - Can be reused for Spring Boot (just remove/replace the Next.js service)
+  - Add a Spring Boot service with Dockerfile
+
+10.10  ZOD VALIDATION → SPRING VALIDATION
+  - Current: Zod schemas validate API request bodies
+  - Migration: Use @Valid + Jakarta Bean Validation annotations
+    (@NotBlank, @NotNull, @Size, @Min, @Max, @Pattern, etc.)
+  - Custom validators for enum values (Role, Level, etc.)
+
+10.11  WEBSOCKET (UNUSED)
+  - lib/websocket.ts and WebSocket-related types in types.ts are
+    prepared infrastructure for a WebSocket-based real-time protocol
+  - Currently UNUSED; the app uses REST polling
+  - If implementing WebSocket in Spring Boot: use Spring WebSocket module
+    with @MessageMapping / STOMP
+
+10.12  NEXT.JS APP ROUTER → SPRING MVC MAPPING
+  Next.js Route                  → Spring Boot Controller
+  ──────────────────────────────────────────────────────
+  POST /api/interview/generate   → @PostMapping("/api/interview/generate")
+  POST /api/interview/next-turn  → @PostMapping("/api/interview/next-turn")
+  POST /api/interview/summary    → @PostMapping("/api/interview/summary")
+  GET  /api/llm/ping             → @GetMapping("/api/llm/ping")
+  POST /api/sessions/create      → @PostMapping("/api/sessions")
+  GET  /api/sessions/list        → @GetMapping("/api/sessions")
+  GET  /api/sessions/{id}        → @GetMapping("/api/sessions/{id}")
+  POST /api/sessions/{id}/message → @PostMapping("/api/sessions/{id}/messages")
+  POST /api/sessions/{id}/end    → @PostMapping("/api/sessions/{id}/end")
+  GET  /api/status               → @GetMapping("/api/status")
+
+10.13  RESPONSE FORMAT CONVENTION
+  All API responses follow this pattern:
+    Success: { ok: true, data/session/sessionId/..., meta? }
+    Error:   { ok: false, error: { code: string, message: string, hint?: string, requestId? } }
+  Consider adopting this same convention in Spring Boot, or switch to
+  standard HTTP status codes with Problem Details (RFC 7807).
+
+================================================================================
+END OF PROJECT STRUCTURE ANALYSIS
+================================================================================
